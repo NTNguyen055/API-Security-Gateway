@@ -86,7 +86,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'docaspythondb',
         'USER': 'root',
-        'PASSWORD': 'Banhmi4o@',
+        'PASSWORD': '',
         'HOST': 'localhost',
         'PORT': '3306',
         
@@ -122,7 +122,7 @@ TIME_ZONE = 'Asia/Ho_Chi_Minh'
 
 USE_I18N = True
 
-USE_TZ = False
+USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
