@@ -31,9 +31,7 @@ packaging==25.0
 pandas==2.3.2
 pillow==11.3.0
 psutil==7.2.1
-psycopg2==2.9.11
 pycparser==2.22
-PyMySQL==1.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 pytz==2025.2
