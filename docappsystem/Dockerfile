@@ -5,7 +5,11 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Cài tool build mysqlclient
+# Tắt interactive để log sạch
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_ROOT_USER_ACTION=ignore
+
+# Cài dependencies để build mysqlclient
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
@@ -16,10 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-RUN pip install --upgrade pip
-
-# Build wheel để tối ưu CI/CD
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+# Upgrade pip + build wheels
+RUN pip install --upgrade pip \
+    && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
 
 
 # ==========================================
@@ -29,20 +32,22 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Runtime lib cho MySQL
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Runtime lib (nhẹ)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Tối ưu Python
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-COPY --from=builder /app/wheels /wheels
+# Copy wheels + cài
+COPY --from=builder /wheels /wheels
 COPY --from=builder /app/requirements.txt .
 
 RUN pip install --no-cache-dir /wheels/*
 
+# Copy source
 COPY . .
 
 EXPOSE 8000
