@@ -5,8 +5,9 @@ services:
     image: ntnguyen055/api-security-app:latest
     container_name: docapp_django
     restart: always
-    ports:
-      - "8000:8000"
+    # Port 8000 bây giờ chỉ mở nội bộ cho gateway, không cần expose ra ngoài public
+    expose:
+      - "8000"
     env_file:
       - /home/ubuntu/appointment-web/.env
     depends_on:
@@ -16,3 +17,20 @@ services:
     image: redis:7-alpine
     container_name: docapp_redis
     restart: always
+
+  gateway:
+    image: openresty/openresty:alpine
+    container_name: openresty_gateway
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount file cấu hình
+      - ./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      # Mount chứng chỉ từ host (Certbot sẽ tạo ở đây)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Thư mục webroot để xác thực ACME Challenge
+      - /var/www/html:/var/www/html:ro
+    depends_on:
+      - app

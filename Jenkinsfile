@@ -17,14 +17,11 @@ pipeline {
     }
 
     stages {
-
-        stage('📥 Checkout') {
-            steps {
-                checkout scm
-            }
+        stage('🚀 Checkout') {
+            steps { checkout scm }
         }
 
-        stage('🐳 Build Image') {
+        stage('📦 Build Image') {
             steps {
                 sh """
                 docker build -t ${IMAGE_NAME}:${IMAGE_TAG} \
@@ -34,7 +31,7 @@ pipeline {
             }
         }
 
-        stage('📦 Push Image') {
+        stage('☁️ Push Image') {
             steps {
                 sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
                 sh """
@@ -44,43 +41,53 @@ pipeline {
             }
         }
 
-        stage('🚀 Deploy') {
+        stage('🚢 Deploy & Rollback') {
             steps {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} '
-                        set -e
-
                         mkdir -p ${BASE_DIR}
                         cd ${BASE_DIR}
 
+                        echo "--- [1] KÉO MÃ NGUỒN MỚI TỪ GITHUB ---"
                         if [ ! -d API-Security-Gateway ]; then
                             git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git
                         else
-                            cd API-Security-Gateway && git pull
+                            cd API-Security-Gateway && git pull origin main
                         fi
 
                         cd ${APP_DIR}
 
-                        if [ ! -f ${env.ENV_PATH} ]; then
-                            echo "Missing .env file"
+                        if [ ! -f ${ENV_PATH} ]; then
+                            echo "❌ LỖI: Không tìm thấy file .env"
                             exit 1
                         fi
 
-                        docker compose down || true
-                        docker rm -f docapp_django || true
-                        docker rm -f docapp_redis || true
+                        echo "--- [2] SAO LƯU BẢN CŨ ---"
+                        docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous || true
 
-                        docker compose pull app
-                        docker compose up -d
+                        echo "--- [3] TẢI & KHỞI CHẠY HỆ THỐNG MỚI ---"
+                        # Pull mới toàn bộ (cả App và OpenResty Gateway nếu có)
+                        docker compose --env-file ${ENV_PATH} pull
+                        # Khởi chạy và xóa bỏ các container rác không còn dùng
+                        docker compose --env-file ${ENV_PATH} up -d --remove-orphans
 
+                        echo "--- [4] KIỂM TRA SỨC KHỎE (15s) ---"
                         sleep 15
 
-                        STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 || true)
+                        # Lấy trạng thái của 2 container chính
+                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django || echo "false")
+                        STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        if [ "\$STATUS" != "200" ]; then
-                            docker compose logs
+                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ]; then
+                            echo "⚠️ LỖI: Phát hiện Container bị crash! Tiến hành Rollback..."
+                            docker compose --env-file ${ENV_PATH} down
+                            docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest
+                            docker compose --env-file ${ENV_PATH} up -d
                             exit 1
+                        else
+                            echo "✅ Dịch vụ Web & Gateway hoạt động ổn định."
+                            docker image prune -f
                         fi
                     '
                     """
@@ -93,11 +100,9 @@ pipeline {
         always {
             sh 'docker logout || true'
         }
-
         success {
             echo "🎉 SUCCESS: ${IMAGE_TAG}"
         }
-
         failure {
             echo "❌ FAILED"
         }
