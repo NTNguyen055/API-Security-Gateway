@@ -13,7 +13,6 @@ pipeline {
 
         BASE_DIR = '/home/ubuntu/appointment-web'
         APP_DIR  = '/home/ubuntu/appointment-web/API-Security-Gateway'
-        ENV_PATH = '/home/ubuntu/appointment-web/.env'
     }
 
     stages {
@@ -119,6 +118,7 @@ pipeline {
                 }
             }
         }
+    }
 
     post {
         always {
