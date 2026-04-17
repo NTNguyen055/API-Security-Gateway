@@ -5,17 +5,18 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Cài dependencies để build psycopg2
+# Cài đủ tool để build mysqlclient
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
-    libpq-dev \
+    default-libmysqlclient-dev \
+    pkg-config \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# Upgrade pip
+# Tối ưu pip
 RUN pip install --upgrade pip
 
 # Build wheels
@@ -29,10 +30,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Chỉ cần runtime lib (nhẹ hơn builder)
+# Chỉ cần runtime libs (nhẹ hơn builder)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
+    default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Tối ưu Python runtime
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 COPY --from=builder /app/wheels /wheels
 COPY --from=builder /app/requirements.txt .
