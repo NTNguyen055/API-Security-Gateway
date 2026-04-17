@@ -18,7 +18,7 @@ services:
     container_name: docapp_redis
     restart: always
 
-  gateway:
+gateway:
     image: openresty/openresty:alpine
     container_name: openresty_gateway
     restart: always
@@ -26,11 +26,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # Mount file cấu hình
       - ./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
-      # Mount chứng chỉ từ host (Certbot sẽ tạo ở đây)
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      # Thư mục webroot để xác thực ACME Challenge
-      - /var/www/html:/var/www/html:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro # Mount chứng chỉ thật
+      - /var/www/html:/var/www/html:ro       # Webroot cho Certbot
     depends_on:
       - app
