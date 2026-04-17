@@ -4,14 +4,11 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# CẢNH BÁO BẢO MẬT: Giữ SECRET_KEY bí mật khi deploy production
-SECRET_KEY = 'django-insecure-=u!!em!u$#9d=ew1uzeq&=90w(%62nx5b)9j66kbhh2*ee__il'
+SECRET_KEY = os.getenv('SECRET_KEY', 'fallback-dev-key')
 
-# CẢNH BÁO BẢO MẬT: Không bật DEBUG khi chạy trên môi trường production
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-# Cho phép tất cả các host truy cập (cần thiết khi chạy trong Docker hoặc môi trường test)
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 
 # Application definition
 
