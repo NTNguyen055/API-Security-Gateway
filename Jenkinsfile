@@ -72,7 +72,7 @@ pipeline {
 
                         cd ${APP_DIR}
 
-                        echo "📄 Ensure .env exists"
+                        echo "📄 Check .env"
                         if [ ! -f ${ENV_PATH} ]; then
                             echo "❌ Missing .env file!"
                             exit 1
@@ -82,16 +82,22 @@ pipeline {
                         docker image inspect ${IMAGE_NAME}:latest > /dev/null 2>&1 && \
                         docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous || true
 
+                        echo "🧹 Clean old containers"
+                        docker compose down || true
+
+                        echo "🧹 Remove orphan container (if exists)"
+                        docker rm -f docapp_django || true
+
                         echo "⬇️ Pull latest image"
                         docker compose pull app
 
-                        echo "🚀 Recreate container"
-                        docker compose up -d --force-recreate app
+                        echo "🚀 Start container"
+                        docker compose up -d app
 
                         echo "⏳ Wait for app (15s)"
                         sleep 15
 
-                        echo "🌐 Health check HTTP"
+                        echo "🌐 Health check"
                         STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 || true)
 
                         if [ "\$STATUS" != "200" ]; then
@@ -113,7 +119,6 @@ pipeline {
                 }
             }
         }
-    }
 
     post {
         always {
