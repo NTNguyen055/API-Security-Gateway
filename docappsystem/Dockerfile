@@ -5,7 +5,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Cài đủ tool để build mysqlclient
+# Cài tool build mysqlclient
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
@@ -16,10 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Tối ưu pip
 RUN pip install --upgrade pip
 
-# Build wheels
+# Build wheel để tối ưu CI/CD
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
 
@@ -30,12 +29,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Chỉ cần runtime libs (nhẹ hơn builder)
+# Runtime lib cho MySQL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Tối ưu Python runtime
+# Tối ưu Python
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
