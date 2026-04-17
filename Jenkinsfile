@@ -8,11 +8,11 @@ pipeline {
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
 
-        EC2_HOST = 'ubuntu@35.76.108.185'
+        EC2_APP_IP = '35.76.108.185'
+        EC2_USER   = 'ubuntu'
 
         BASE_DIR = '/home/ubuntu/appointment-web'
         APP_DIR  = '/home/ubuntu/appointment-web/API-Security-Gateway'
-        ENV_PATH = '/home/ubuntu/appointment-web/.env'
     }
 
     stages {
@@ -37,7 +37,7 @@ pipeline {
 
         stage('📦 Push Image') {
             steps {
-                echo "📤 Push Docker Image"
+                echo "📤 Push to Docker Hub"
 
                 sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
 
@@ -52,36 +52,27 @@ pipeline {
             steps {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
 
-                    // 🔧 Setup server + repo
                     sh """
-                    ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} '
+                        set -e
+
+                        echo "📁 Setup folder"
                         sudo mkdir -p ${BASE_DIR}
-                        sudo chown -R ubuntu:ubuntu ${BASE_DIR}
+                        sudo chown -R ${EC2_USER}:${EC2_USER} ${BASE_DIR}
 
                         cd ${BASE_DIR}
 
+                        echo "📦 Sync source code"
                         if [ ! -d "API-Security-Gateway" ]; then
-                            echo "📥 Clone repo..."
                             git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git
                         else
-                            echo "🔄 Pull latest code..."
                             cd API-Security-Gateway && git pull
                         fi
-                    '
-                    """
 
-                    // 📄 Copy docker-compose
-                    sh """
-                    scp -o StrictHostKeyChecking=no docker-compose.yml \
-                    ${EC2_HOST}:${APP_DIR}/
-                    """
-
-                    // 🚀 Deploy + rollback
-                    sh """
-                    ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
                         cd ${APP_DIR}
 
-                        echo "🧱 Backup current image"
+                        echo "🧱 Backup image (if exists)"
+                        docker image inspect ${IMAGE_NAME}:latest > /dev/null 2>&1 && \
                         docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous || true
 
                         echo "⬇️ Pull latest image"
@@ -93,19 +84,17 @@ pipeline {
                         echo "⏳ Waiting for health check..."
                         sleep 10
 
-                        CONTAINER_NAME=docapp_django
-                        IS_RUNNING=\$(docker inspect -f "{{.State.Running}}" \$CONTAINER_NAME 2>/dev/null || echo "false")
+                        IS_RUNNING=\$(docker inspect -f "{{.State.Running}}" docapp_django 2>/dev/null || echo "false")
 
                         if [ "\$IS_RUNNING" != "true" ]; then
                             echo "❌ Deploy failed → rollback"
 
                             docker-compose down
 
-                            docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest
+                            docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest || true
 
                             docker-compose up -d app
 
-                            echo "🔄 Rollback completed"
                             exit 1
                         fi
 
@@ -124,7 +113,7 @@ pipeline {
             sh 'docker logout || true'
         }
         success {
-            echo "🎉 SUCCESS: ${IMAGE_TAG} deployed"
+            echo "🎉 SUCCESS: ${IMAGE_TAG}"
         }
         failure {
             echo "❌ FAILED: Check logs / rollback executed"
