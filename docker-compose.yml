@@ -8,6 +8,8 @@ services:
     # Lưu ý: Ta đổi ports thành expose để chỉ nội bộ Docker đọc được, không hở ra ngoài
     expose:
       - "8000"
+    env_file:
+    - /home/ubuntu/appointment-web/.env
     depends_on:
       - redis
 
