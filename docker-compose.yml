@@ -5,11 +5,9 @@ services:
     image: ntnguyen055/api-security-app:latest
     container_name: docapp_django
     restart: always
-    # Port 8000 bây giờ chỉ mở nội bộ cho gateway, không cần expose ra ngoài public
+    # Lưu ý: Ta đổi ports thành expose để chỉ nội bộ Docker đọc được, không hở ra ngoài
     expose:
       - "8000"
-    env_file:
-      - /home/ubuntu/appointment-web/.env
     depends_on:
       - redis
 
@@ -18,7 +16,7 @@ services:
     container_name: docapp_redis
     restart: always
 
-gateway:
+  gateway:
     image: openresty/openresty:alpine
     container_name: openresty_gateway
     restart: always
@@ -27,7 +25,8 @@ gateway:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro # Mount chứng chỉ thật
-      - /var/www/html:/var/www/html:ro       # Webroot cho Certbot
+      # Đưa 2 file chứng chỉ thật vào trong OpenResty
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/html:/var/www/html:ro
     depends_on:
       - app
