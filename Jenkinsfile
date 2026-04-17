@@ -13,6 +13,7 @@ pipeline {
 
         BASE_DIR = '/home/ubuntu/appointment-web'
         APP_DIR  = '/home/ubuntu/appointment-web/API-Security-Gateway'
+        ENV_PATH = '/home/ubuntu/appointment-web/.env'
     }
 
     stages {
@@ -62,7 +63,7 @@ pipeline {
 
                         cd ${BASE_DIR}
 
-                        echo "📦 Sync source code"
+                        echo "📦 Sync source"
                         if [ ! -d "API-Security-Gateway" ]; then
                             git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git
                         else
@@ -71,29 +72,36 @@ pipeline {
 
                         cd ${APP_DIR}
 
-                        echo "🧱 Backup image (if exists)"
+                        echo "📄 Ensure .env exists"
+                        if [ ! -f ${ENV_PATH} ]; then
+                            echo "❌ Missing .env file!"
+                            exit 1
+                        fi
+
+                        echo "🧱 Backup image"
                         docker image inspect ${IMAGE_NAME}:latest > /dev/null 2>&1 && \
                         docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous || true
 
                         echo "⬇️ Pull latest image"
-                        docker-compose pull app
+                        docker compose pull app
 
-                        echo "🚀 Start container"
-                        docker-compose up -d app
+                        echo "🚀 Recreate container"
+                        docker compose up -d --force-recreate app
 
-                        echo "⏳ Waiting for health check..."
-                        sleep 10
+                        echo "⏳ Wait for app (15s)"
+                        sleep 15
 
-                        IS_RUNNING=\$(docker inspect -f "{{.State.Running}}" docapp_django 2>/dev/null || echo "false")
+                        echo "🌐 Health check HTTP"
+                        STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 || true)
 
-                        if [ "\$IS_RUNNING" != "true" ]; then
-                            echo "❌ Deploy failed → rollback"
+                        if [ "\$STATUS" != "200" ]; then
+                            echo "❌ App failed (HTTP \$STATUS) → rollback"
 
-                            docker-compose down
+                            docker compose down
 
                             docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest || true
 
-                            docker-compose up -d app
+                            docker compose up -d app
 
                             exit 1
                         fi
