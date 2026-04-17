@@ -113,12 +113,15 @@ CACHES = {
 # Cấu hình S3 cho Static và Media
 USE_S3 = os.environ.get('USE_S3', 'False') == 'True'
 
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = False
+
 if USE_S3:
     AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME')
     AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-northeast-1')
     
     # Do dùng IAM Role nên không cần AWS_ACCESS_KEY_ID
-    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com'    
     
     STORAGES = {
         "default": {
