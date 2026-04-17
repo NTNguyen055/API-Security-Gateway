@@ -1,14 +1,28 @@
 from pathlib import Path
 import os
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'fallback-dev-key')
+# TÌM VÀ ĐỌC FILE .ENV (Dù file .env nằm ở thư mục hiện tại hay thư mục cha)
+env_path = os.path.join(BASE_DIR, '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv(os.path.join(BASE_DIR.parent, '.env')) # Tìm ở thư mục cha (appointment-web)
 
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
+# Bây giờ os.environ mới có dữ liệu!
+SECRET_KEY = os.environ.get('SECRET_KEY', 'fallback-dev-key')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+
+# Đảm bảo đọc ALLOWED_HOSTS an toàn
+allowed_hosts_str = os.environ.get('ALLOWED_HOSTS', '*')
+ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_str.split(',')]
+
+# Khai báo Nginx proxy an toàn
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Application definition
 
