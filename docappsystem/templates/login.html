@@ -22,8 +22,8 @@
                   </div>
                   <div class="login-right">
                      <div class="login-right-wrap">
-                        <h1>Login</h1>
-                        <p class="account-subtitle">Access to our dashboard</p>
+                        <h1>Đăng nhập</h1>
+                        <p class="account-subtitle">Vào trang quản lý cá nhân</p>
                         {% if messages %}
                             {% for message in messages %}
                              {% if message.tags == 'error' %}
@@ -51,22 +51,19 @@
                         <form action="{% url 'doLogin' %}"  method="POST" >
                             {% csrf_token %}
                             
-                            
                            <div class="form-group">
-                            <input type="email" class="form-control" placeholder="Your Email Address" name="email">
+                            <input type="email" class="form-control" placeholder="Email của bạn" name="email">
                            </div>
                            <div class="form-group">
-                            <input type="password" class="form-control" placeholder="Password" name="password">
+                            <input type="password" class="form-control" placeholder="Mật khẩu của bạn" name="password">
                            </div>
                            <div class="form-group">
-                              <button class="btn btn-primary btn-block" type="submit">Login</button>
+                              <button class="btn btn-primary btn-block" type="submit">Đăng nhập</button>
                            </div>
                         </form>
                         
-                       
-                       
-                        <div class="btn btn-primary btn-block"><a href="{% url 'docsignup' %}">Doctor Signup</a></div>
-                        <div class="btn btn-primary btn-block"><a href="{% url 'index' %}">Home Page</a></div>
+                        <div class="btn btn-primary btn-block"><a href="{% url 'docsignup' %}">Đăng ký tài khoản Bác sĩ</a></div>
+                        <div class="btn btn-primary btn-block"><a href="{% url 'index' %}">Về lại trang chủ</a></div>
                      </div>
                   </div>
                </div>

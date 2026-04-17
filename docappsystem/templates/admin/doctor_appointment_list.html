@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Appointments</h3>
+    <h3 class="page-title">Các lịch hẹn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">View Aappointment</li>
+    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Xem lịch hẹn</li>
     </ul>
     </div>
     
@@ -51,13 +51,13 @@
         {% if patientdetails %}
     <tr>
    
-    <th>Appointment Number</th>
-    <th>Patient Name</th>
-    <th>Date of Appointment</th>
-    <th>Time of Appointment</th>
-    <th>Creation Date</th>
-    <th>Status</th>
-    <th class="text-right">Action</th>
+    <th>Mã cuộc hẹn</th>
+    <th>Tên bệnh nhân</th>
+    <th>Ngày hẹn</th>
+    <th>Giờ hẹn</th>
+    <th>Ngày tạo</th>
+    <th>Trạng thái</th>
+    <th class="text-right">Hành động</th>
     </tr>
     </thead>
     <tbody>
@@ -70,27 +70,27 @@
     <td>{{i.time_of_appointment}}</td>
     <td>{{i.created_at}}</td>
     {% if i.status == '0' %}
-                                                <td>Not Updated Yet</td>
+                                                <td>Chưa được cập nhật</td>
                                                 {% else %}
                                                 <td>{{ i.status}}</td>{% endif %}
     <td class="text-right">
     <div class="actions">
     <a href="{% url 'viewpatientdetails' i.id %}">
-    <i class="btn btn-primary btn-block">View</i>
+    <i class="btn btn-primary btn-block">Xem</i>
     </a>
   
     </div>
     </td>
     </tr> {% endfor %}
     {% else %}
-    <p>No Data Available</p>
+    <p>Không có dữ liệu</p>
    
     {% endif %}
     </tbody>
     </table>
     
  
-<div class="btn btn-primary"><a href="{% url 'viewdoctorlist' %}">Back</a></div>
+<div class="btn btn-primary"><a href="{% url 'viewdoctorlist' %}">Trở về</a></div>
     </div>
     </div>
     </div>

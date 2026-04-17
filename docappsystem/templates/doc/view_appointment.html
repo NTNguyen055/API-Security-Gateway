@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Appointments</h3>
+    <h3 class="page-title">Các lịch hẹn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">View Aappointment</li>
+    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Xem lịch hẹn</li>
     </ul>
     </div>
    
@@ -50,13 +50,13 @@
     <thead>
     <tr>
    
-    <th>Appointment Number</th>
-    <th>Patient Name</th>
-    <th>Date of Appointment</th>
-    <th>Time of Appointment</th>
-    <th>Creation Date</th>
-    <th>Status</th>
-    <th class="text-right">Action</th>
+    <th>Mã lịch hẹn</th>
+    <th>Tên bệnh nhân</th>
+    <th>Ngày hẹn</th>
+    <th>Giờ hẹn</th>
+    <th>Ngày tạo</th>
+    <th>Trạng thái</th>
+    <th class="text-right">Hành động</th>
     </tr>
     </thead>
     <tbody>
@@ -69,13 +69,13 @@
     <td>{{i.time_of_appointment}}</td>
     <td>{{i.created_at}}</td>
     {% if i.status == '0' %}
-                                                <td>Not Updated Yet</td>
+                                                <td>Chưa được cập nhật</td>
                                                 {% else %}
                                                 <td>{{ i.status}}</td>{% endif %}
     <td class="text-right">
     <div class="actions">
     <a href="{% url 'patientappointmentdetails' i.id %}">
-    <i class="btn btn-primary btn-block">View</i>
+    <i class="btn btn-primary btn-block">Xem</i>
     </a>
   
     </div>
@@ -89,17 +89,17 @@
 <div class="pagination" style="padding-top: 20px;padding-bottom: 20px;text-align: center;">
     <span class="step-links">
         {% if view_appointment.has_previous %}
-            <a href="?page=1">&laquo; First</a>
-            <a href="?page={{ view_appointment.previous_page_number }}">Previous</a>
+            <a href="?page=1">&laquo; Đầu</a>
+            <a href="?page={{ view_appointment.previous_page_number }}">Trước</a>
         {% endif %}
 
         <span class="current">
-            Page {{ view_appointment.number }} of {{ view_appointment.paginator.num_pages }}.
+            Trang {{ view_appointment.number }} của {{ view_appointment.paginator.num_pages }}.
         </span>
 
         {% if view_appointment.has_next %}
-            <a href="?page={{ view_appointment.next_page_number }}">Next</a>
-            <a href="?page={{ view_appointment.paginator.num_pages }}">Last &raquo;</a>
+            <a href="?page={{ view_appointment.next_page_number }}">Sau</a>
+            <a href="?page={{ view_appointment.paginator.num_pages }}">Cuối &raquo;</a>
         {% endif %}
     </span>
 </div>

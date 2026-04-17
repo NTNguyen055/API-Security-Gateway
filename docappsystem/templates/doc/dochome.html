@@ -6,9 +6,9 @@
     <div class="page-header">
        <div class="row">
           <div class="col-sm-12">
-             <h3 class="page-title">Welcome Doctor {{ user.first_name }} {{ user.last_name }}!</h3>
+             <h3 class="page-title">Xin chào Bác sĩ {{ user.first_name }} {{ user.last_name }}!</h3>
              <ul class="breadcrumb">
-                <li class="breadcrumb-item active">Dashboard</li>
+                <li class="breadcrumb-item active">Trang chủ</li>
              </ul>
           </div>
        </div>
@@ -23,7 +23,7 @@
                    </div>
                    <div class="db-info">
                       <h3>{{allaptcount}}</h3>
-                      <h6>All Appointment</h6>
+                      <h6>Tất cả lịch hẹn</h6>
                    </div>
                 </div>
              </div>
@@ -38,7 +38,7 @@
                    </div>
                    <div class="db-info">
                       <h3>{{newaptcount}}</h3>
-                      <a href="{% url 'patientnewappointment' %}"><h6>New Appointment</h6></a>
+                      <a href="{% url 'patientnewappointment' %}"><h6>Lịch hẹn mới</h6></a>
                    </div>
                 </div>
              </div>
@@ -53,7 +53,7 @@
                    </div>
                    <div class="db-info">
                      <h3>{{appaptcount}}</h3>
-                     <a href="{% url 'patientapprovedappointment' %}"><h6>Approved Appointment</h6></a>
+                     <a href="{% url 'patientapprovedappointment' %}"><h6>Lịch hẹn đã được phê duyệt</h6></a>
                    </div>
                 </div>
              </div>
@@ -68,7 +68,7 @@
                    </div>
                    <div class="db-info">
                      <h3>{{canaptcount}}</h3>
-                     <a href="{% url 'patientcancelledappointment' %}"><h6>Cancelled Appointment</h6></a>
+                     <a href="{% url 'patientcancelledappointment' %}"><h6>Lịch hẹn đã bị hủy</h6></a>
                    </div>
                 </div>
              </div>
@@ -83,7 +83,7 @@
                   </div>
                   <div class="db-info">
                      <h3>{{comaptcount}}</h3>
-                     <a href="{% url 'patientappointmentcompleted' %}"><h6>Completed Appointment</h6></a>
+                     <a href="{% url 'patientappointmentcompleted' %}"><h6>Lịch hẹn đã hoàn thành</h6></a>
                   </div>
                </div>
             </div>

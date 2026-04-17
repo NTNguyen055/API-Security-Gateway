@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Doctor Details</h3>
+    <h3 class="page-title">Chi tiết Bác sĩ</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">Doctor Details</li>
+    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Chi tiết Bác sĩ</li>
     </ul>
     </div>
    
@@ -51,28 +51,28 @@
             
               <tr>
                   
-                  <th>Name of Doctor</th>
+                  <th>Tên của Bác sĩ</th>
                   <td>{{i.admin.first_name}} {{i.admin.last_name}}</td>
-                  <th>Contact Number</th>
+                  <th>SĐT liên hệ</th>
                   <td>{{i.mobilenumber}}</td>
                 </tr>
                 <tr>
                   
-                  <th>Email Address</th>
+                  <th>Email liên hệ</th>
                   <td>{{i.admin.email}}</td>
-                  <th>Doctor Specialization</th>
+                  <th>Chuyên môn</th>
                   <td>{{i.specialization_id.sname}}</td>
                 </tr>
                 <tr>
                   
-                  <th>Profile Pic</th>
+                  <th>Ảnh đại diện</th>
                   
                   <td><img src="{{i.admin.profile_pic.url}}" width="50" height="50"></td>
-                  <th>Date of Registrations</th>
+                  <th>Ngày tạo tài khoản</th>
                   <td>{{i.regdate_at}}</td>
                 </tr>{% endfor %}
           </table>
-          <div class="btn btn-primary"><a href="{% url 'viewdoctorlist' %}">Back</a></div>
+          <div class="btn btn-primary"><a href="{% url 'viewdoctorlist' %}">Trở về</a></div>
     </div>
     </div>
     </div>

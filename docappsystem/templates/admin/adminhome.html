@@ -6,9 +6,9 @@
     <div class="page-header">
        <div class="row">
           <div class="col-sm-12">
-             <h3 class="page-title">Welcome {{ user.first_name }} {{ user.last_name }}!!!!</h3>
+             <h3 class="page-title">Xin chào Admin {{ user.first_name }} {{ user.last_name }}!!!!</h3>
              <ul class="breadcrumb">
-                <li class="breadcrumb-item active">Dashboard</li>
+                <li class="breadcrumb-item active">Trang chủ</li>
              </ul>
           </div>
        </div>
@@ -23,7 +23,7 @@
                    </div>
                    <div class="db-info">
                       <h3>{{doctor_count}}</h3>
-                      <a href="{% url 'viewdoctorlist' %}"><h6>Total Doctor</h6></a>
+                      <a href="{% url 'viewdoctorlist' %}"><h6>Tổng số Bác sĩ</h6></a>
                    </div>
                 </div>
              </div>
@@ -38,7 +38,7 @@
                    </div>
                    <div class="db-info">
                       <h3>{{specialization_count}}</h3>
-                      <a href="{% url 'manage_specilizations' %}"><h6>Total Specialization</h6></a>
+                      <a href="{% url 'manage_specilizations' %}"><h6>Tổng số chuyên môn</h6></a>
                    </div>
                 </div>
              </div>

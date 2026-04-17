@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Appointment Report</h3>
+    <h3 class="page-title">Báo cáo lịch hẹn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">Between Dates Report of Appointment</li>
+    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Báo cáo lịch hẹn giữa các ngày</li>
     </ul>
     </div>
     
@@ -20,31 +20,30 @@
     <div class="row">
     <div class="col-sm-12">
         <div class="card-block">
-            <h4 class="sub-title">Between Dates Report</h4>
+            <h4 class="sub-title">Báo cáo khoảng thời gian</h4>
             <form method="get" action="" enctype="multipart/form-data" action="{% url 'between_date_report' %}">
                 {% csrf_token %}
                 <div class="form-group row">
-                    <label class="col-sm-2 col-form-label">From Date</label>
+                    <label class="col-sm-2 col-form-label">Từ ngày</label>
                     <div class="col-sm-10">
                         <input type="date" id="query" name="start_date" class="form-control" required="">
                     </div>
                 </div>
                  <div class="form-group row">
-                    <label class="col-sm-2 col-form-label">To Date</label>
+                    <label class="col-sm-2 col-form-label">Đến ngày</label>
                     <div class="col-sm-10">
                         <input type="date" id="query" name="end_date" class="form-control" required="">
                     </div>
                 </div>
 
-
                 <div class="form-group row">
                     <div class="col-sm-10">
-                        <button type="submit" class="btn btn-dark">Submit</button>
+                        <button type="submit" class="btn btn-dark">Nộp lại</button>
                     </div>
                 </div>
             </form>
                     
-                        </div>
+        </div>
     <div class="card card-table">
 
     <div class="card-body">
@@ -77,14 +76,14 @@
     <thead>
     <tr>
         {% if patient %}
-        <p style="font-size: 20px;color: blue;text-align: center;">Data Between: "{{ start_date }} to {{ end_date }}"</p>
-    <th>Appointment Number</th>
-    <th>Patient Name</th>
-    <th>Date of Appointment</th>
-    <th>Time of Appointment</th>
-    <th>Creation Date</th>
-    <th>Status</th>
-    <th class="text-right">Action</th>
+        <p style="font-size: 20px;color: blue;text-align: center;">Dữ liệu giữa: "{{ start_date }} to {{ end_date }}"</p>
+        <th>Mã lịch hẹn</th>
+        <th>Tên bệnh nhân</th>
+        <th>Ngày hẹn</th>
+        <th>Giờ hẹn</th>
+        <th>Ngày tạo</th>
+        <th>Trạng thái</th>
+        <th class="text-right">Hành động</th>
     </tr>
     </thead>
     <tbody>
@@ -97,13 +96,13 @@
     <td>{{i.time_of_appointment}}</td>
     <td>{{i.created_at}}</td>
     {% if i.status == '0' %}
-                                                <td>Not Updated Yet</td>
+                                                <td>Chưa được cập nhật</td>
                                                 {% else %}
                                                 <td>{{ i.status}}</td>{% endif %}
     <td class="text-right">
     <div class="actions">
     <a href="{% url 'patientappointmentdetails' i.id %}">
-    <i class="btn btn-primary btn-block">View</i>
+    <i class="btn btn-primary btn-block">Xem</i>
     </a>
   
     </div>

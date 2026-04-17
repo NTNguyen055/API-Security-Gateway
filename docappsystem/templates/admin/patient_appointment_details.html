@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Appointments</h3>
+    <h3 class="page-title">Chi tiết lịch hẹn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">View Aappointment</li>
+    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Xem lịch hẹn</li>
     </ul>
     </div>
     
@@ -48,61 +48,61 @@
     <div class="table-responsive">
     <table class="table table-hover table-center mb-0 datatable">
       {% for i in patientdetails %}
-      <tr><label style="font-size: medium;text-align: center;">Appointment Number: {{i.appointmentnumber}}</label></tr>
+      <tr><label style="font-size: medium;text-align: center;">Mã lịch hẹn: {{i.appointmentnumber}}</label></tr>
         <tr>
             
-            <th>Patient Name</th>
+            <th>Tên bệnh nhân</th>
             <td>{{i.fullname}}</td>
-            <th>Patient Contact Number</th>
+            <th>SĐT bệnh nhân</th>
             <td>{{i.mobilenumber}}</td>
           </tr>
           <tr>
             
-            <th>Patient Email</th>
+            <th>Email bệnh nhân</th>
             <td>{{i.email}}</td>
-            <th>Date of Appointment</th>
+            <th>Ngày hẹn</th>
             <td>{{i.date_of_appointment}}</td>
           </tr>
           <tr>
             
-            <th>Date of Time</th>
+            <th>Giờ hẹn</th>
             <td>{{i.time_of_appointment}}</td>
-            <th>Message</th>
+            <th>Tin nhắn của bệnh nhân</th>
             <td>{{i.additional_msg}}</td>
           </tr>
           <tr>
                               
             {% if i.status == '0' %}
-            <th>Doctor Remark</th>
-            <td>Not Updatet Yet</td>
+            <th>Nhận xét của Bác sĩ</th>
+            <td>Chưa được cập nhật</td>
             {% else %}
             <tr>
-            <th>Doctor Remark</th>
+            <th>Nhận xét của Bác sĩ</th>
             <td>{{ i.remark}}</td>{% endif %}
             
               {% if i.status == '0' %}
-              <th>Staus</th>
-              <td>Not Updatet Yet</td>
+              <th>Trạng thái</th>
+              <td>Chưa được cập nhật</td>
               {% else %}
-              <th>Status</th>
+              <th>Trạng thái</th>
               <td>{{ i.status}}</td> {% endif %}
               </tr>
           
               <tr>
                 {% if i.status == 'Completed' %}
-                <th>Prescribed Medicine</th>
+                <th>Đơn thuốc theo toa</th>
                 <td>{{ i.prescription}}</td>
                 {% else %}
-                <th>Prescribed Medicine</th>
-                <td>Not Prescribed Yet</td> {% endif %}
+                <th>Đơn thuốc theo toa</th>
+                <td>Chưa được cập nhật</td> {% endif %}
                 </tr>
                 <tr>
                   {% if i.status == 'Completed' %}
-                  <th>Recommended Test</th>
+                  <th>Bài kiểm tra cá nhân</th>
                   <td>{{ i.recommendedtest}}</td>
                   {% else %}
-                  <th>Recommended Test</th>
-                  <td>Not Recommended Yet</td> {% endif %}
+                  <th>Bài kiểm tra cá nhân</th>
+                  <td>Chưa được cập nhật</td> {% endif %}
                   </tr>
     </table>
     {% endfor %}

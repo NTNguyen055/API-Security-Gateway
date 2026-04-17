@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row">
     <div class="col">
-    <h3 class="page-title">Update Website Details</h3>
+    <h3 class="page-title">Quản lý Website</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">Update Website Details</li>
+    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Quản lý Website</li>
     </ul>
     </div>
     </div>
@@ -20,7 +20,7 @@
     <div class="col-lg-12">
     <div class="card">
     <div class="card-header">
-    <h5 class="card-title">Update Website Details</h5>
+    <h5 class="card-title">Quản lý thông tin</h5>
     </div>
     <div class="card-body">
         {% if messages %}
@@ -52,7 +52,7 @@
                        
                         {% csrf_token %}
                         <div class="form-group row">
-                            <label class="col-sm-2 col-form-label">Page Title</label>
+                            <label class="col-sm-2 col-form-label">Tiêu đề trang</label>
                             <div class="col-sm-10">
                                 <input type="text" class="form-control" name="pagetitle" value="{{i.pagetitle}}">
                                 <input type="hidden" name="web_id" class="form-control" id="web_id" required="true" value="{{i.id}}">
@@ -60,32 +60,32 @@
                             </div>
                         </div>
                         <div class="form-group row">
-                            <label class="col-sm-2 col-form-label">Address</label>
+                            <label class="col-sm-2 col-form-label">Địa chỉ liên hệ</label>
                             <div class="col-sm-10">
                                 <textarea class="form-control" name="address">{{i.address}}</textarea>
                             </div>
                         </div>
                         <div class="form-group row">
-                            <label class="col-sm-2 col-form-label">About Us</label>
+                            <label class="col-sm-2 col-form-label">Giới thiệu</label>
                             <div class="col-sm-10">
                                 
                                 <textarea class="form-control" name="aboutus">{{i.aboutus}}</textarea>
                             </div>
                         </div>
                         <div class="form-group row">
-                            <label class="col-sm-2 col-form-label">Email</label>
+                            <label class="col-sm-2 col-form-label">Email liên hệ</label>
                             <div class="col-sm-10">
                                 <input type="email" class="form-control" name="email" value="{{i.email}}">
                             </div>
                         </div>
                         <div class="form-group row">
-                            <label class="col-sm-2 col-form-label">Mobile Number</label>
+                            <label class="col-sm-2 col-form-label">Số điện thoại</label>
                             <div class="col-sm-10">
                                 <input type="text" class="form-control" name="mobilenumber" value="{{i.mobilenumber}}">
                             </div>
                         </div>
                         {% endfor %}
-                        <button type="submit" class="btn btn-primary btn-user btn-block">Update</button>    
+                        <button type="submit" class="btn btn-primary btn-user btn-block">Cập nhật</button>    
                                 </form>
     </div>
     </div>

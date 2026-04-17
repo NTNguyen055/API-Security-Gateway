@@ -9,10 +9,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Search Appointments</h3>
+    <h3 class="page-title">Tìm kiếm lịch hẹn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">Search Aappointment</li>
+    <li class="breadcrumb-item"><a href="{% url 'doctor_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Tìm kiếm lịch hẹn</li>
     </ul>
     </div>
     
@@ -22,19 +22,18 @@
     <div class="row">
     <div class="col-sm-12">
         <div class="card-block">
-            <h4 class="sub-title">Search Appointment </h4>
             <form  method="GET">
                 
                 {% csrf_token %}
                 <div class="form-group row">
-                    <label class="col-sm-4 col-form-label">Search(By Fullname/Appointment Number)</label>
+                    <label class="col-sm-4 col-form-label">Tìm kiếm (Tên/Mã lịch hẹn)</label>
                     <div class="col-sm-10">
                         <input type="text" id="query" name="query" class="form-control" required="">
                     </div>
                 </div>
                
              
-                <button type="submit" class="btn btn-primary btn-user btn-block">Search</button>    
+                <button type="submit" class="btn btn-primary btn-user btn-block">Đồng ý</button>    
                         </form>
                     
                         </div>

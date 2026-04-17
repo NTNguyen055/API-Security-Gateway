@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row">
     <div class="col">
-    <h3 class="page-title">Update Specialization</h3>
+    <h3 class="page-title">Cập nhật chuyên môn</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Dashboard</a></li>
-    <li class="breadcrumb-item active">Update Specialization</li>
+    <li class="breadcrumb-item"><a href="{% url 'admin_home' %}">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Cập nhật chuyên môn</li>
     </ul>
     </div>
     </div>
@@ -20,7 +20,6 @@
     <div class="col-lg-12">
     <div class="card">
     <div class="card-header">
-    <h5 class="card-title">Update Specialization</h5>
     </div>
     <div class="card-body">
         {% if messages %}
@@ -51,7 +50,7 @@
                         {% csrf_token %}
    
     <div class="form-group row">
-    <label class="col-form-label col-md-4">Specialization Name</label>
+    <label class="col-form-label col-md-4">Tên chuyên môn</label>
     <div class="col-md-10">
         <input type="text" class="form-control" name="sname" value="{{specialization.sname}}">
         <input type="hidden" name="sep_id" class="form-control" id="sep_id" required="true" value="{{specialization.id}}">
@@ -60,7 +59,7 @@
     
     <div class="form-group row">
         <div class="col-sm-10">
-            <button type="submit" class="btn btn-dark">Update</button>
+            <button type="submit" class="btn btn-dark">Cập nhật</button>
         </div>
     </div>
     

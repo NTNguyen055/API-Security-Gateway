@@ -4,12 +4,12 @@
 {% block content %}
 <div class="container-fluid page-header py-5 mb-5 wow fadeIn" data-wow-delay="0.1s">
     <div class="container py-5">
-        <h1 class="display-3 text-white mb-3 animated slideInDown">Search Appointment</h1>
+        <h1 class="display-3 text-white mb-3 animated slideInDown">Tìm Kiếm Lịch Hẹn</h1>
         <nav aria-label="breadcrumb animated slideInDown">
             <ol class="breadcrumb text-uppercase mb-0">
-                <li class="breadcrumb-item"><a class="text-white" href="{% url 'index' %}">Home</a></li>
+                <li class="breadcrumb-item"><a class="text-white" href="{% url 'index' %}">Trang chủ</a></li>
               
-                <li class="breadcrumb-item text-primary active" aria-current="page">Search Appointment</li>
+                <li class="breadcrumb-item text-primary active" aria-current="page">Tìm kiếm lịch hẹn</li>
             </ol>
         </nav>
     </div>
@@ -25,12 +25,12 @@
             <div class="col-sm-12">
              
                 <div class="card-block">
-                    <h4 class="sub-title">Search Appointment </h4>
+                    <h4 class="sub-title">Tìm kiếm lịch hẹn </h4>
                     <form  method="GET">
                         
                         {% csrf_token %}
                         <div class="form-group row">
-                            <label class="col-sm-12 col-form-label">Search(By Fullname/Appointment Number)</label>
+                            <label class="col-sm-12 col-form-label">Nhập (Tên/Mã lịch hẹn)</label>
                             <br>
                             <div class="col-sm-12">
                                 <input type="text" id="query" name="query" class="form-control" style="border: solid #000 1px;" required="">
@@ -39,12 +39,12 @@
                         </div>
                       
                        
-                     <br>
-                        <button type="submit" class="btn btn-primary btn-user btn-block">Search</button>    
+                    <br>
+                        <button type="submit" class="btn btn-primary btn-user btn-block">Tìm kiếm</button>    
                                 </form>
                             
-                                </div>
-                                <br>
+                </div>
+                    <br>
                                 
             <div class="card card-table">
         
@@ -78,13 +78,13 @@
             <thead>
             <tr>
                 {% if patient %}
-            <th>Appointment Number</th>
-            <th>Patient Name</th>
-            <th>Date of Appointment</th>
-            <th>Time of Appointment</th>
-            <th>Creation Date</th>
-            <th>Status</th>
-            <th class="text-right">Action</th>
+            <th>Mã lịch hẹn</th>
+            <th>Tên bệnh nhân</th>
+            <th>Ngày hẹn</th>
+            <th>Giờ hẹn</th>
+            <th>Ngày đăng ký</th>
+            <th>Trạng thái</th>
+            <th class="text-right">Hoạt động</th>
             </tr>
             </thead>
             <tbody>
@@ -97,7 +97,7 @@
             <td>{{i.time_of_appointment}}</td>
             <td>{{i.created_at}}</td>
             {% if i.status == '0' %}
-                                                        <td>Not Updated Yet</td>
+                                                        <td>Chưa được cập nhật</td>
                                                         {% else %}
                                                         <td>{{ i.status}}</td>{% endif %}
             <td class="text-right">
@@ -113,7 +113,7 @@
             </tbody>
             {% else %}
             {% if query %}
-                <p style="font-size: 20px;color: blue;text-align: center;">No records found for: "{{ query }}"</p>
+                <p style="font-size: 20px;color: blue;text-align: center;">Không tìm thấy hồ sơ nào cho: "{{ query }}"</p>
            
             {% endif %}
         

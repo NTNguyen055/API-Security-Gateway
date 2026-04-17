@@ -7,10 +7,10 @@
     <div class="page-header">
     <div class="row align-items-center">
     <div class="col">
-    <h3 class="page-title">Reports</h3>
+    <h3 class="page-title">Các báo cáo</h3>
     <ul class="breadcrumb">
-    <li class="breadcrumb-item"><a href="index.html">Dashboard</a></li>
-    <li class="breadcrumb-item active">Between Dates Reports</li>
+    <li class="breadcrumb-item"><a href="index.html">Trang chủ</a></li>
+    <li class="breadcrumb-item active">Các báo cáo</li>
     </ul>
     </div>
     
@@ -20,17 +20,17 @@
     <div class="row">
     <div class="col-sm-12">
         <div class="card-block">
-            <h4 class="sub-title">Between Dates Report</h4>
+            <h4 class="sub-title">Báo cáo khoảng thời gian</h4>
             <form method="get" action="" enctype="multipart/form-data" action="{% url 'doctor_between_date_report' %}">
                 {% csrf_token %}
                 <div class="form-group row">
-                    <label class="col-sm-2 col-form-label">From Date</label>
+                    <label class="col-sm-2 col-form-label">Từ ngày</label>
                     <div class="col-sm-10">
                         <input type="date" id="query" name="start_date" class="form-control" required="">
                     </div>
                 </div>
                  <div class="form-group row">
-                    <label class="col-sm-2 col-form-label">To Date</label>
+                    <label class="col-sm-2 col-form-label">Đến ngày</label>
                     <div class="col-sm-10">
                         <input type="date" id="query" name="end_date" class="form-control" required="">
                     </div>
@@ -39,7 +39,7 @@
 
                 <div class="form-group row">
                     <div class="col-sm-10">
-                        <button type="submit" class="btn btn-dark">Submit</button>
+                        <button type="submit" class="btn btn-dark">Nộp lại</button>
                     </div>
                 </div>
             </form>
@@ -77,13 +77,14 @@
     <thead>
     <tr>
         {% if doctor %}
-        <p style="font-size: 20px;color: blue;text-align: center;">Data Between: "{{ start_date }} to {{ end_date }}"</p>
-        <th>S.No</th>
-        <th>Fullname</th>
-        <th>Mobile Number</th>
-        <th>Email</th>
-        <th>Registration Date</th>
-        <th class="text-right">Action</th>
+        <p style="font-size: 20px;color: blue;text-align: center;">Dữ liệu giữa: "{{ start_date }} to {{ end_date }}"</p>
+        <th>Mã lịch hẹn</th>
+        <th>Tên bệnh nhân</th>
+        <th>Ngày hẹn</th>
+        <th>Giờ hẹn</th>
+        <th>Ngày tạo</th>
+        <th>Trạng thái</th>
+        <th class="text-right">Hành động</th>
     </tr>
     </thead>
     <tbody>
@@ -97,10 +98,10 @@
             <td class="text-right">
             <div class="actions">
             <a href="{% url 'viewdoctordetails' i.id %}" class="btn btn-sm bg-success-light mr-2">
-           View
+           Xem
             </a>
             <a href="{% url 'viewdoctorappointmentlist' i.id %}" class="btn btn-sm bg-danger-light">
-            Appointment List
+           Danh sách lịch hẹn
             </a>
             </div>
             </td>
