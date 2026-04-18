@@ -29,7 +29,8 @@ pipeline {
                              -t ${APP_IMAGE}:latest \
                              ./docappsystem
 
-                docker build -t ${GW_IMAGE}:${IMAGE_TAG} \
+                docker build --no-cache \
+                             -t ${GW_IMAGE}:${IMAGE_TAG} \
                              -t ${GW_IMAGE}:latest \
                              ./nginx
                 """
