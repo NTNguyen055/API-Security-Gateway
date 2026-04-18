@@ -1,10 +1,9 @@
 FROM openresty/openresty:alpine-fat
 
 # Cài các thư viện Lua non-blocking
-# --no-cache tránh dùng cache cũ khi rebuild image
-RUN luarocks install --no-cache lua-resty-jwt \
- && luarocks install --no-cache lua-resty-redis \
- && luarocks install --no-cache lua-resty-http
+RUN luarocks install lua-resty-jwt \
+ && luarocks install lua-resty-redis \
+ && luarocks install lua-resty-http
 
 # Copy nginx.conf vào đúng vị trí OpenResty đọc
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
