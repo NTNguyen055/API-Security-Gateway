@@ -5,7 +5,7 @@ local uri_patterns = {
     [[\bunion\b.{0,20}\bselect\b]],
     [[<script[\s>]]],
     [[javascript\s*:]],
-    [[\.\./\.\./]],         -- Path traversal
+    [[\.\./\.\./]],        -- Path traversal (Chống đọc trộm file hệ thống)
 }
 
 -- Pattern check request body (POST/PUT)
@@ -18,27 +18,26 @@ local body_patterns = {
 }
 
 function _M.run()
-    -- Check URI
+    -- 1. Check URI
     local uri = ngx.var.request_uri
     for _, pattern in ipairs(uri_patterns) do
         if ngx.re.find(uri, pattern, "ijo") then
-            ngx.log(ngx.WARN, "[WAF] URI pattern blocked: ", uri,
-                    " IP: ", ngx.var.remote_addr)
+            ngx.log(ngx.WARN, "[WAF] URI pattern blocked: ", uri, " IP: ", ngx.var.remote_addr)
             return ngx.exit(ngx.HTTP_FORBIDDEN)
         end
     end
 
-    -- Check request body chỉ với POST/PUT
+    -- 2. Check request body chỉ với POST/PUT
     local method = ngx.var.request_method
     if method == "POST" or method == "PUT" then
         ngx.req.read_body()
         local body = ngx.req.get_body_data()
+        
         if body then
-            local body_lower = string.lower(body)
+            -- Bỏ string.lower() vì cờ "i" trong "ijo" đã tự động không phân biệt hoa thường
             for _, pattern in ipairs(body_patterns) do
-                if ngx.re.find(body_lower, pattern, "ijo") then
-                    ngx.log(ngx.WARN, "[WAF] Body pattern blocked, IP: ",
-                            ngx.var.remote_addr)
+                if ngx.re.find(body, pattern, "ijo") then
+                    ngx.log(ngx.WARN, "[WAF] Body pattern blocked, IP: ", ngx.var.remote_addr)
                     return ngx.exit(ngx.HTTP_FORBIDDEN)
                 end
             end
