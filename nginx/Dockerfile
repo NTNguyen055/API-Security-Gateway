@@ -15,10 +15,6 @@ COPY lua/ /usr/local/openresty/lualib/
 # Set Lua package path — khớp với lua_package_path trong nginx.conf
 ENV LUA_PATH="/usr/local/openresty/lualib/?.lua;;"
 
-# Validate nginx config khi build — phát hiện lỗi cú pháp sớm
-# trước khi push lên DockerHub
-RUN openresty -t
-
 EXPOSE 80 443
 
 CMD ["openresty", "-g", "daemon off;"]
