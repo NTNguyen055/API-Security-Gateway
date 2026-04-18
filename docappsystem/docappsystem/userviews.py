@@ -16,9 +16,6 @@ def Index(request):
     }
     return render(request, 'index.html',context)
 
-
-
-
 def create_appointment(request):
     doctorview = DoctorReg.objects.all()
     page = Page.objects.all()

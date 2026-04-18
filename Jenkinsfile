@@ -2,93 +2,120 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = 'ntnguyen055/api-security-app'
-        IMAGE_TAG  = "v${BUILD_NUMBER}"
+        APP_IMAGE = 'ntnguyen055/api-security-app'
+        GW_IMAGE  = 'ntnguyen055/api-security-gateway'
+        IMAGE_TAG = "v${BUILD_NUMBER}"
 
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
+        EC2_APP_IP      = '35.76.108.185'  
 
-        EC2_APP_IP = '35.76.108.185'
-        EC2_USER   = 'ubuntu'
-
+        EC2_USER = 'ubuntu'
         BASE_DIR = '/home/ubuntu/appointment-web'
         APP_DIR  = '/home/ubuntu/appointment-web/API-Security-Gateway'
         ENV_PATH = '/home/ubuntu/appointment-web/.env'
     }
 
     stages {
-        stage('🚀 Checkout') {
+
+        stage('Checkout') {
             steps { checkout scm }
         }
 
-        stage('📦 Build Image') {
+        stage('Build Images') {
             steps {
                 sh """
-                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} \
-                             -t ${IMAGE_NAME}:latest \
+                docker build -t ${APP_IMAGE}:${IMAGE_TAG} \
+                             -t ${APP_IMAGE}:latest \
                              ./docappsystem
+
+                docker build -t ${GW_IMAGE}:${IMAGE_TAG} \
+                             -t ${GW_IMAGE}:latest \
+                             ./nginx
                 """
             }
         }
 
-        stage('☁️ Push Image') {
+        stage('Test') {
+            steps {
+                // Chạy Django test trong container tạm — dùng SQLite để không cần RDS
+                sh """
+                docker run --rm \
+                    --entrypoint "" \
+                    -e DEBUG=True \
+                    -e SECRET_KEY=ci-test-key-not-used-in-prod \
+                    -e JWT_SECRET_KEY=ci-jwt-key \
+                    -e DB_ENGINE=django.db.backends.sqlite3 \
+                    -e DB_NAME=/tmp/test.db \
+                    ${APP_IMAGE}:${IMAGE_TAG} \
+                    python manage.py test --verbosity=2
+                """
+            }
+        }
+
+        stage('Push Images') {
             steps {
                 sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
                 sh """
-                docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                docker push ${IMAGE_NAME}:latest
+                docker push ${APP_IMAGE}:${IMAGE_TAG}
+                docker push ${APP_IMAGE}:latest
+                docker push ${GW_IMAGE}:${IMAGE_TAG}
+                docker push ${GW_IMAGE}:latest
                 """
             }
         }
 
-        stage('🚢 Deploy & Rollback') {
+        stage('Deploy & Rollback') {
             steps {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} '
                         mkdir -p ${BASE_DIR}
-                        cd ${BASE_DIR}
 
-                        echo "--- [1] KÉO MÃ NGUỒN MỚI TỪ GITHUB ---"
-                        if [ ! -d API-Security-Gateway ]; then
-                            git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git
+                        echo "--- [1] PULL CODE ---"
+                        if [ ! -d ${APP_DIR} ]; then
+                            git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git ${APP_DIR}
                         else
-                            cd API-Security-Gateway && git pull origin main
+                            cd ${APP_DIR} && git pull origin main
                         fi
 
                         cd ${APP_DIR}
 
                         if [ ! -f ${ENV_PATH} ]; then
-                            echo "❌ LỖI: Không tìm thấy file .env"
+                            echo "ERROR: .env not found at ${ENV_PATH}"
                             exit 1
                         fi
 
-                        echo "--- [2] SAO LƯU BẢN CŨ ---"
-                        docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:previous || true
+                        echo "--- [2] BACKUP IMAGE TAG ---"
+                        docker tag ${APP_IMAGE}:latest ${APP_IMAGE}:previous || true
+                        docker tag ${GW_IMAGE}:latest ${GW_IMAGE}:previous || true
 
-                        echo "--- [3] TẢI & KHỞI CHẠY HỆ THỐNG MỚI ---"
-                        # Pull mới toàn bộ (cả App và OpenResty Gateway nếu có)
+                        echo "--- [3] DEPLOY ---"
                         docker compose --env-file ${ENV_PATH} pull
-                        # Khởi chạy và xóa bỏ các container rác không còn dùng
                         docker compose --env-file ${ENV_PATH} up -d --remove-orphans
 
-                        echo "--- [4] KIỂM TRA SỨC KHỎE (15s) ---"
-                        sleep 15
+                        echo "--- [4] HEALTH CHECK (30s) ---"
+                        sleep 30
 
-                        # Lấy trạng thái của 2 container chính
-                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django || echo "false")
-                        STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
+                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django    2>/dev/null || echo "false")
+                        STATUS_GW=\$(docker inspect -f  "{{.State.Running}}" openresty_gateway 2>/dev/null || echo "false")
 
-                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ]; then
-                            echo "⚠️ LỖI: Phát hiện Container bị crash! Tiến hành Rollback..."
-                            docker compose --env-file ${ENV_PATH} down
-                            docker tag ${IMAGE_NAME}:previous ${IMAGE_NAME}:latest
-                            docker compose --env-file ${ENV_PATH} up -d
+                        HTTP_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" \
+                            --max-time 10 http://localhost/health/ || echo "000")
+
+                        echo "Container app: \$STATUS_APP | gateway: \$STATUS_GW | HTTP: \$HTTP_STATUS"
+
+                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || [ "\$HTTP_STATUS" != "200" ]; then
+                            echo "HEALTH CHECK FAILED → ROLLBACK"
+                            docker compose down
+                            docker tag ${APP_IMAGE}:previous ${APP_IMAGE}:latest || true
+                            docker tag ${GW_IMAGE}:previous ${GW_IMAGE}:latest || true
+                            docker compose up -d
                             exit 1
-                        else
-                            echo "✅ Dịch vụ Web & Gateway hoạt động ổn định."
-                            docker image prune -f
                         fi
+
+                        echo "DEPLOY SUCCESS: ${IMAGE_TAG}"
+                        docker image prune -f
                     '
                     """
                 }
@@ -101,10 +128,10 @@ pipeline {
             sh 'docker logout || true'
         }
         success {
-            echo "🎉 SUCCESS: ${IMAGE_TAG}"
+            echo "SUCCESS: ${IMAGE_TAG} deployed"
         }
         failure {
-            echo "❌ FAILED"
+            echo "FAILED: ${IMAGE_TAG} - check logs"
         }
     }
 }

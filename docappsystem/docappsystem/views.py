@@ -5,6 +5,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from dasapp.models import CustomUser
 from django.contrib.auth import get_user_model
+
 User = get_user_model()
 def BASE(request):
     return render(request,'base.html')
