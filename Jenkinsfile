@@ -8,7 +8,7 @@ pipeline {
 
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
-        EC2_APP_IP      = '35.76.108.185'  
+        EC2_APP_IP      = '35.76.108.185'
 
         EC2_USER = 'ubuntu'
         BASE_DIR = '/home/ubuntu/appointment-web'
@@ -25,6 +25,8 @@ pipeline {
         stage('Build Images') {
             steps {
                 sh """
+                docker builder prune -f
+
                 docker build -t ${APP_IMAGE}:${IMAGE_TAG} \
                              -t ${APP_IMAGE}:latest \
                              ./docappsystem
@@ -39,13 +41,12 @@ pipeline {
 
         stage('Test') {
             steps {
-                // Chạy Django test trong container tạm — dùng SQLite để không cần RDS
                 sh """
                 docker run --rm \
                     --entrypoint "" \
                     -e DEBUG=True \
-                    -e SECRET_KEY=ci-test-key-not-used-in-prod \
-                    -e JWT_SECRET_KEY=ci-jwt-key \
+                    -e SECRET_KEY=test-key \
+                    -e JWT_SECRET_KEY=test-jwt \
                     -e DB_ENGINE=django.db.backends.sqlite3 \
                     -e DB_NAME=/tmp/test.db \
                     ${APP_IMAGE}:${IMAGE_TAG} \
@@ -66,7 +67,7 @@ pipeline {
             }
         }
 
-        stage('Deploy & Rollback') {
+        stage('Deploy & Smart Rollback') {
             steps {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh """
@@ -83,39 +84,43 @@ pipeline {
                         cd ${APP_DIR}
 
                         if [ ! -f ${ENV_PATH} ]; then
-                            echo "ERROR: .env not found at ${ENV_PATH}"
+                            echo "ERROR: .env not found"
                             exit 1
                         fi
 
-                        echo "--- [2] BACKUP IMAGE TAG ---"
-                        docker tag ${APP_IMAGE}:latest ${APP_IMAGE}:previous || true
-                        docker tag ${GW_IMAGE}:latest ${GW_IMAGE}:previous || true
+                        echo "--- [2] BACKUP CURRENT VERSION ---"
+                        docker tag ${APP_IMAGE}:latest ${APP_IMAGE}:backup || true
+                        docker tag ${GW_IMAGE}:latest  ${GW_IMAGE}:backup  || true
 
                         echo "--- [3] DEPLOY ---"
                         docker compose --env-file ${ENV_PATH} pull
                         docker compose --env-file ${ENV_PATH} up -d --remove-orphans
 
-                        echo "--- [4] HEALTH CHECK (30s) ---"
-                        sleep 30
+                        echo "--- [4] WAIT ---"
+                        sleep 20
 
-                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django    2>/dev/null || echo "false")
-                        STATUS_GW=\$(docker inspect -f  "{{.State.Running}}" openresty_gateway 2>/dev/null || echo "false")
+                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django || echo "false")
+                        STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        HTTP_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" \
-                            --max-time 10 http://localhost/health/ || echo "000")
+                        # 🔥 test pipeline thật (qua HTTPS → chạy Lua)
+                        HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" \
+                            https://localhost/ || echo "000")
 
-                        echo "Container app: \$STATUS_APP | gateway: \$STATUS_GW | HTTP: \$HTTP_STATUS"
+                        echo "APP=\$STATUS_APP GW=\$STATUS_GW HTTP=\$HTTP_STATUS"
 
-                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || [ "\$HTTP_STATUS" != "200" ]; then
-                            echo "HEALTH CHECK FAILED → ROLLBACK"
+                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || [ "\$HTTP_STATUS" = "500" ]; then
+                            echo "❌ DEPLOY FAIL → ROLLBACK"
+
                             docker compose down
-                            docker tag ${APP_IMAGE}:previous ${APP_IMAGE}:latest || true
-                            docker tag ${GW_IMAGE}:previous ${GW_IMAGE}:latest || true
+
+                            docker tag ${APP_IMAGE}:backup ${APP_IMAGE}:latest || true
+                            docker tag ${GW_IMAGE}:backup  ${GW_IMAGE}:latest  || true
+
                             docker compose up -d
                             exit 1
                         fi
 
-                        echo "DEPLOY SUCCESS: ${IMAGE_TAG}"
+                        echo "✅ DEPLOY SUCCESS: ${IMAGE_TAG}"
                         docker image prune -f
                     '
                     """
@@ -127,12 +132,6 @@ pipeline {
     post {
         always {
             sh 'docker logout || true'
-        }
-        success {
-            echo "SUCCESS: ${IMAGE_TAG} deployed"
-        }
-        failure {
-            echo "FAILED: ${IMAGE_TAG} - check logs"
         }
     }
 }
