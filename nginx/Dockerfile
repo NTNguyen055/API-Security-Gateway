@@ -1,13 +1,13 @@
 FROM openresty/openresty:alpine-fat
 
-RUN luarocks install lua-resty-jwt \
- && luarocks install lua-resty-redis \
- && luarocks install lua-resty-http
+RUN luarocks install --no-cache lua-resty-jwt \
+ && luarocks install --no-cache lua-resty-redis \
+ && luarocks install --no-cache lua-resty-http
 
-# Tạo thư mục riêng
+# Tạo thư mục lua
 RUN mkdir -p /usr/local/openresty/nginx/lua
 
-# copy vào đúng chỗ
+# Copy config và lua modules
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY lua/ /usr/local/openresty/nginx/lua/
 
