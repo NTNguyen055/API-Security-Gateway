@@ -66,9 +66,14 @@ services:
       app:
         condition: service_healthy
 
-    # 🔥 THÊM healthcheck cho gateway
+    # ✅ FIX: dùng User-Agent tùy chỉnh để tránh bad_bot.lua
+    # nginx.conf trả 200 thẳng tại /health/ không qua Lua
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health/"]
+      test: ["CMD", "curl", "-sf",
+             "-A", "HealthChecker/1.0",
+             "-H", "Host: dacn3.duckdns.org",
+             "http://localhost/health/"]
       interval: 20s
       timeout: 5s
       retries: 3
+      start_period: 15s

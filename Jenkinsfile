@@ -110,19 +110,23 @@ pipeline {
                     docker compose --env-file "\$ENV_PATH" up -d --remove-orphans
 
                     echo "--- WAIT CONTAINERS ---"
-                    sleep 10
+                    sleep 15
 
                     echo "--- [4] HEALTH CHECK ---"
 
-                    STATUS_APP=\$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
-                    STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
+                    STATUS_APP=\$(docker inspect -f "{{.State.Health.Status}}" docapp_django 2>/dev/null || echo "unhealthy")
+                    STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway 2>/dev/null || echo "false")
 
                     HTTP_STATUS="000"
 
                     for i in 1 2 3 4 5 6 7 8 9 10; do
+                        # ✅ FIX: dùng User-Agent tùy chỉnh để tránh bị bad_bot.lua chặn
+                        # Health check gọi thẳng port 80, nginx trả 200 ngay không qua Lua
                         HTTP_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" \
+                            --max-time 5 \
+                            -A "HealthChecker/1.0" \
                             -H "Host: dacn3.duckdns.org" \
-                            http://localhost/health/ || echo "000")
+                            http://localhost/health/ 2>/dev/null || echo "000")
 
                         echo "Try \$i → HTTP=\$HTTP_STATUS"
 
@@ -130,7 +134,7 @@ pipeline {
                             break
                         fi
 
-                        sleep 3
+                        sleep 5
                     done
 
                     echo "APP=\$STATUS_APP GW=\$STATUS_GW HTTP=\$HTTP_STATUS"
@@ -146,7 +150,7 @@ pipeline {
                         docker tag "\$APP_IMAGE:backup" "\$APP_IMAGE:latest" || true
                         docker tag "\$GW_IMAGE:backup"  "\$GW_IMAGE:latest"  || true
 
-                        docker compose up -d
+                        docker compose --env-file "\$ENV_PATH" up -d
                         exit 1
                     fi
 
