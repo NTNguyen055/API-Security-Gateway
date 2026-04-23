@@ -6,7 +6,7 @@ from django.conf import settings
 from django.urls import path, include
 from django.http import HttpResponse 
 from django.db import connection
-
+from django.views.decorators.csrf import csrf_exempt
 
 # Thêm hàm này
 def health_check(request):
@@ -24,7 +24,7 @@ urlpatterns = [
     path('doLogin', views.doLogin, name='doLogin'),
     path('doLogout', views.doLogout, name='logout'),
 
-    path('health/', health_check),
+    path('health/', csrf_exempt(health_check)),
 
     # This is admin panel
     path('Admin/AdminHome', adminviews.ADMINHOME, name='admin_home'),

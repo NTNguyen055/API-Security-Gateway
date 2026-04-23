@@ -2,26 +2,41 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# TÌM VÀ ĐỌC FILE .ENV (Dù file .env nằm ở thư mục hiện tại hay thư mục cha)
+# ================= LOAD .ENV (SAFE VERSION) =================
 env_path = os.path.join(BASE_DIR, '.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
 else:
-    load_dotenv(os.path.join(BASE_DIR.parent, '.env')) # Tìm ở thư mục cha (appointment-web)
+    load_dotenv(os.path.join(BASE_DIR.parent, '.env'))
 
-# Bây giờ os.environ mới có dữ liệu!
+# ================= CORE SETTINGS =================
 SECRET_KEY = os.environ.get('SECRET_KEY', 'fallback-dev-key')
 
-DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ['true', '1', 'yes']
 
-# Đảm bảo đọc ALLOWED_HOSTS an toàn
-allowed_hosts_str = os.environ.get('ALLOWED_HOSTS', '*')
-ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_str.split(',')]
+# ================= FIX ALLOWED_HOSTS (IMPORTANT) =================
+allowed_hosts_str = os.environ.get('ALLOWED_HOSTS', '')
 
-# Khai báo Nginx proxy an toàn
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in allowed_hosts_str.split(',')
+    if host.strip()
+]
+
+# fallback an toàn khi dev lỗi .env
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
+    
+# ================= HEALTH CHECK + NGINX PROXY =================
+CSRF_TRUSTED_ORIGINS = [
+    "https://dacn3.duckdns.org",
+    "http://dacn3.duckdns.org",
+]
+
+# ================= PROXY (Nginx/OpenResty) =================
+USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Application definition
