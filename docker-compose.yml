@@ -52,7 +52,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # 🔥 FIX QUAN TRỌNG: chỉ mở local EC2
+      # Chỉ mở local EC2
       - "127.0.0.1:9145:9145"
 
     env_file:
