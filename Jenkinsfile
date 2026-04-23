@@ -77,77 +77,83 @@ pipeline {
             steps {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh '''
-                    ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_APP_IP '
-                        set -e
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} '
+                    set -e
 
-                        mkdir -p $BASE_DIR
+                    BASE_DIR="/home/ubuntu/appointment-web"
+                    APP_DIR="/home/ubuntu/appointment-web/API-Security-Gateway"
+                    ENV_PATH="/home/ubuntu/appointment-web/.env"
+                    APP_IMAGE="ntnguyen055/api-security-app"
+                    GW_IMAGE="ntnguyen055/api-security-gateway"
 
-                        echo "--- [1] SYNC CODE ---"
-                        if [ ! -d $APP_DIR ]; then
-                            git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git $APP_DIR
-                        else
-                            cd $APP_DIR
-                            git fetch origin
-                            git reset --hard origin/main
-                            git clean -fd
+                    mkdir -p "$BASE_DIR"
+
+                    echo "--- [1] SYNC CODE ---"
+                    if [ ! -d "$APP_DIR" ]; then
+                        git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
+                    else
+                        cd "$APP_DIR"
+                        git fetch origin
+                        git reset --hard origin/main
+                        git clean -fd
+                    fi
+
+                    cd "$APP_DIR"
+
+                    if [ ! -f "$ENV_PATH" ]; then
+                        echo "ERROR: .env not found"
+                        exit 1
+                    fi
+
+                    echo "--- [2] BACKUP IMAGE ---"
+                    docker tag "$APP_IMAGE:latest" "$APP_IMAGE:backup" || true
+                    docker tag "$GW_IMAGE:latest"  "$GW_IMAGE:backup"  || true
+
+                    echo "--- [3] DEPLOY ---"
+                    docker compose --env-file "$ENV_PATH" pull
+                    docker compose --env-file "$ENV_PATH" up -d --remove-orphans
+
+                    echo "--- [4] HEALTH CHECK ---"
+
+                    STATUS_APP=$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
+                    STATUS_GW=$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
+
+                    HTTP_STATUS="000"
+
+                    for i in {1..10}; do
+                        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                            -H "Host: dacn3.duckdns.org" \
+                            http://localhost/health/ || echo "000")
+
+                        echo "Try $i → HTTP=$HTTP_STATUS"
+
+                        if [ "$HTTP_STATUS" = "200" ]; then
+                            break
                         fi
 
-                        cd $APP_DIR
+                        sleep 3
+                    done
 
-                        if [ ! -f $ENV_PATH ]; then
-                            echo "ERROR: .env not found"
-                            exit 1
-                        fi
+                    echo "APP=$STATUS_APP GW=$STATUS_GW HTTP=$HTTP_STATUS"
 
-                        echo "--- [2] BACKUP IMAGE ---"
-                        docker tag $APP_IMAGE:latest $APP_IMAGE:backup || true
-                        docker tag $GW_IMAGE:latest  $GW_IMAGE:backup  || true
+                    if [ "$STATUS_APP" != "healthy" ] || \
+                    [ "$STATUS_GW" != "true" ] || \
+                    [ "$HTTP_STATUS" != "200" ]; then
 
-                        echo "--- [3] DEPLOY ---"
-                        docker compose --env-file $ENV_PATH pull
-                        docker compose --env-file $ENV_PATH up -d --remove-orphans
+                        echo "❌ DEPLOY FAIL → ROLLBACK"
 
-                        echo "--- [4] HEALTH CHECK ---"
+                        docker compose down
 
-                        STATUS_APP=$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
-                        STATUS_GW=$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
+                        docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest" || true
+                        docker tag "$GW_IMAGE:backup"  "$GW_IMAGE:latest"  || true
 
-                        HTTP_STATUS="000"
+                        docker compose up -d
+                        exit 1
+                    fi
 
-                        for i in {1..10}; do
-                            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                                -H "Host: dacn3.duckdns.org" \
-                                http://localhost/health/ || echo "000")
+                    echo "✅ DEPLOY SUCCESS"
 
-                            echo "Try $i → HTTP=$HTTP_STATUS"
-
-                            if [ "$HTTP_STATUS" = "200" ]; then
-                                break
-                            fi
-
-                            sleep 3
-                        done
-
-                        echo "APP=$STATUS_APP GW=$STATUS_GW HTTP=$HTTP_STATUS"
-
-                        if [ "$STATUS_APP" != "healthy" ] || \
-                           [ "$STATUS_GW" != "true" ] || \
-                           [ "$HTTP_STATUS" != "200" ]; then
-
-                            echo "❌ DEPLOY FAIL → ROLLBACK"
-
-                            docker compose down
-
-                            docker tag $APP_IMAGE:backup $APP_IMAGE:latest || true
-                            docker tag $GW_IMAGE:backup  $GW_IMAGE:latest  || true
-
-                            docker compose up -d
-                            exit 1
-                        fi
-
-                        echo "✅ DEPLOY SUCCESS: $IMAGE_TAG"
-
-                        docker image prune -f
+                    docker image prune -f
                     '
                     '''
                 }
