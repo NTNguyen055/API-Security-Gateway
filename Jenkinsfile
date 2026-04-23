@@ -82,13 +82,16 @@ pipeline {
                         set -e
 
                         mkdir -p ${BASE_DIR}
-
+                        
                         echo "--- [1] PULL CODE ---"
                         if [ ! -d ${APP_DIR} ]; then
                             git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git ${APP_DIR}
                         else
-                            cd ${APP_DIR} && git pull origin main
-                        fi
+                            cd ${APP_DIR}
+                            git fetch origin
+                            git reset --hard origin/main
+                            git clean -fd
+                        fi  
 
                         cd ${APP_DIR}
 
