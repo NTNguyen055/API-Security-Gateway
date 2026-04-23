@@ -33,10 +33,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PYTHONUNBUFFERED=1
 
-# 🔥 TỐI ƯU: giảm bytecode size
+# Giảm bytecode size
 ENV PYTHONOPTIMIZE=1
 
-# 🔥 chỉ giữ runtime dependency (nhẹ hơn)
+# Chỉ giữ runtime dependency (nhẹ hơn)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb3 \
     curl \
@@ -50,10 +50,10 @@ RUN pip install --no-cache-dir /wheels/* \
 
 COPY . .
 
-# 🔥 COLLECT STATIC (nếu dùng Django static)
+# COLLECT STATIC (nếu dùng Django static)
 RUN python manage.py collectstatic --noinput
 
-# 🔥 SECURITY: chạy non-root
+# SECURITY: chạy non-root
 RUN useradd -m appuser
 USER appuser
 
