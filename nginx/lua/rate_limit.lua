@@ -27,7 +27,7 @@ function _M.run()
     local ip = ngx.var.remote_addr
     local ua = ngx.var.http_user_agent or "unknown"
 
-    local key = ngx.var.binary_remote_addr .. ua
+    local key = ngx.var.binary_remote_addr
 
     local delay, err = limiter:incoming(key, true)
 

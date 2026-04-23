@@ -5,7 +5,14 @@ local dev_pattern     = [[\b(curl|wget|python-requests|postmanruntime|insomnia|h
 
 function _M.run()
     local ip = ngx.var.remote_addr
-    local ua = ngx.var.http_user_agent
+    local ua = ngx.var.http_user_agent or ""
+
+    -- =========================
+    -- WHITELIST HEALTH CHECK
+    -- =========================
+    if ua:find("HealthChecker") or ua:find("curl") then
+        return nil
+    end
 
     -- Tier 3: UA rỗng
     if not ua or ua == "" then
@@ -23,18 +30,19 @@ function _M.run()
         return 403
     end
 
-    -- Tier 2: dev tools
+    -- Tier 2: dev tools (KHÔNG BLOCK)
     if ngx.re.find(ua_lower, dev_pattern, "jo") then
         ngx.log(ngx.INFO, "[BAD_BOT] Dev tool: ", ua, " IP: ", ip)
         return nil
     end
 
-    -- Tier 4: header bất thường (optional)
+    -- Tier 4: Accept header check (SAFE VERSION)
     local accept = ngx.var.http_accept
+
     if not accept then
-        ngx.log(ngx.WARN, "[BAD_BOT] Missing Accept header IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"missing_accept"}) end
-        return 403
+        -- KHÔNG BLOCK HEALTH CHECK / SYSTEM CALLS
+        ngx.log(ngx.WARN, "[BAD_BOT] Missing Accept header (non-critical): ", ip)
+        return nil
     end
 
     return nil

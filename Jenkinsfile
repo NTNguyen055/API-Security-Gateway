@@ -153,6 +153,8 @@ fi
 
 echo "DEPLOY SUCCESS"
 docker image prune -f
+
+rm -f /tmp/deploy_script.sh
 '''
 
                 sshagent(credentials: [EC2_SSH_CREDS]) {

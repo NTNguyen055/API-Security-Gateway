@@ -1,43 +1,58 @@
 FROM openresty/openresty:alpine-fat
 
-# Cài git
-RUN apk add --no-cache git
+# ================= BASE =================
+RUN apk add --no-cache \
+    git \
+    curl \
+    ca-certificates \
+    && update-ca-certificates
 
-# Tạo thư mục lua
-RUN mkdir -p /usr/local/openresty/nginx/lua
+# ================= LUA DIR =================
+RUN mkdir -p /usr/local/openresty/lualib/resty
 
-# lua-resty-hmac (bắt buộc cho jwt)
-RUN git clone https://github.com/jkeys089/lua-resty-hmac.git /tmp/lua-resty-hmac \
- && cp /tmp/lua-resty-hmac/lib/resty/hmac.lua /usr/local/openresty/lualib/resty/
+# ================= LUA MODULES =================
 
-# lua-resty-jwt
-RUN git clone https://github.com/SkyLothar/lua-resty-jwt.git /tmp/lua-resty-jwt \
- && cp -r /tmp/lua-resty-jwt/lib/resty/* /usr/local/openresty/lualib/resty/
+# hmac
+RUN git clone --depth 1 https://github.com/jkeys089/lua-resty-hmac.git /tmp/hmac \
+ && cp /tmp/hmac/lib/resty/hmac.lua /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/hmac
 
-# lua-resty-redis
-RUN git clone https://github.com/openresty/lua-resty-redis.git /tmp/lua-resty-redis \
- && cp -r /tmp/lua-resty-redis/lib/resty/* /usr/local/openresty/lualib/resty/
+# jwt
+RUN git clone --depth 1 https://github.com/SkyLothar/lua-resty-jwt.git /tmp/jwt \
+ && cp -r /tmp/jwt/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/jwt
 
-# lua-resty-http
-RUN git clone https://github.com/ledgetech/lua-resty-http.git /tmp/lua-resty-http \
- && cp -r /tmp/lua-resty-http/lib/resty/* /usr/local/openresty/lualib/resty/
+# redis
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-redis.git /tmp/redis \
+ && cp -r /tmp/redis/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/redis
 
-# nginx-lua-prometheus
-RUN git clone https://github.com/knyar/nginx-lua-prometheus.git /tmp/prometheus \
- && cp /tmp/prometheus/prometheus.lua /usr/local/openresty/lualib/
+# http
+RUN git clone --depth 1 https://github.com/ledgetech/lua-resty-http.git /tmp/http \
+ && cp -r /tmp/http/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/http
 
-# lua-resty-string (cần cho jwt sha256)
-RUN git clone https://github.com/openresty/lua-resty-string.git /tmp/lua-resty-string \
- && cp -r /tmp/lua-resty-string/lib/resty/* /usr/local/openresty/lualib/resty/
+# prometheus
+RUN git clone --depth 1 https://github.com/knyar/nginx-lua-prometheus.git /tmp/prom \
+ && cp /tmp/prom/prometheus.lua /usr/local/openresty/lualib/ \
+ && rm -rf /tmp/prom
 
-# lua-resty-limit-traffic (cần cho rate_limit)
-RUN git clone https://github.com/openresty/lua-resty-limit-traffic.git /tmp/lua-resty-limit \
- && cp -r /tmp/lua-resty-limit/lib/resty/* /usr/local/openresty/lualib/resty/
+# string
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-string.git /tmp/string \
+ && cp -r /tmp/string/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/string
 
-# Copy config + lua modules
+# limit traffic
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-limit-traffic.git /tmp/limit \
+ && cp -r /tmp/limit/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/limit
+
+# ================= CONFIG =================
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY lua/ /usr/local/openresty/nginx/lua/
 
+# ================= PORT =================
 EXPOSE 80 443
 
+# ================= RUN =================
 CMD ["openresty", "-g", "daemon off;"]

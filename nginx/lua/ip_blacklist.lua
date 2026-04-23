@@ -31,7 +31,7 @@ function _M.run()
         return nil
     end
 
-    red:set_keepalive(10000, 100, "redis_pool")
+    red:set_keepalive(10000, 100)
 
     if res == 1 or res == "1" then
         ngx.log(ngx.WARN, "[BLACKLIST] Blocked IP: ", ip)
