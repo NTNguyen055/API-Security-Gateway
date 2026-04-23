@@ -102,14 +102,17 @@ pipeline {
                         STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django || echo "false")
                         STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        # 🔥 test pipeline thật (qua HTTPS → chạy Lua)
+                        # Test pipeline thật (qua HTTPS → chạy Lua)
                         HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" \
                             https://localhost/ || echo "000")
 
                         echo "APP=\$STATUS_APP GW=\$STATUS_GW HTTP=\$HTTP_STATUS"
 
-                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || [ "\$HTTP_STATUS" = "500" ]; then
-                            echo "❌ DEPLOY FAIL → ROLLBACK"
+                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || \
+                            { [ "\$HTTP_STATUS" != "200" ] && \
+                                [ "\$HTTP_STATUS" != "301" ] && \
+                                [ "\$HTTP_STATUS" != "302" ]; }; then
+                            echo "DEPLOY FAIL → ROLLBACK"
 
                             docker compose down
 
@@ -120,7 +123,7 @@ pipeline {
                             exit 1
                         fi
 
-                        echo "✅ DEPLOY SUCCESS: ${IMAGE_TAG}"
+                        echo "DEPLOY SUCCESS: ${IMAGE_TAG}"
                         docker image prune -f
                     '
                     """

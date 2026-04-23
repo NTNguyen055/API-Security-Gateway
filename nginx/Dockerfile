@@ -2,7 +2,8 @@ FROM openresty/openresty:alpine-fat
 
 RUN luarocks install lua-resty-jwt \
  && luarocks install lua-resty-redis \
- && luarocks install lua-resty-http
+ && luarocks install lua-resty-http \
+ && luarocks install nginx-lua-prometheus
 
 RUN mkdir -p /usr/local/openresty/nginx/lua
 
