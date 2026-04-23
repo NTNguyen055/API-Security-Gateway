@@ -82,7 +82,7 @@ pipeline {
                         set -e
 
                         mkdir -p ${BASE_DIR}
-                        
+
                         echo "--- [1] PULL CODE ---"
                         if [ ! -d ${APP_DIR} ]; then
                             git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git ${APP_DIR}
@@ -112,27 +112,34 @@ pipeline {
                         sleep 25
 
                         echo "--- [5] HEALTH CHECK ---"
-                        STATUS_APP=\$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
-                        STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost/ || echo "000")
+                        STATUS_APP=$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
+                        STATUS_GW=$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        echo "APP=\$STATUS_APP GW=\$STATUS_GW HTTP=\$HTTP_STATUS"
+                        HTTP_STATUS="000"
 
-                        if [ "\$STATUS_APP" != "healthy" ] || \
-                           [ "\$STATUS_GW" != "true" ] || \
-                           { [ "\$HTTP_STATUS" != "200" ] && \
-                             [ "\$HTTP_STATUS" != "301" ] && \
-                             [ "\$HTTP_STATUS" != "302" ]; }; then
+                        # Retry (quan trọng nhất)
+                        for i in {1..10}; do
+                            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                                -H "Host: dacn3.duckdns.org" \
+                                http://localhost/health/ || echo "000")
+
+                            echo "Try $i → HTTP=$HTTP_STATUS"
+
+                            if [ "$HTTP_STATUS" = "200" ]; then
+                                break
+                            fi
+
+                            sleep 3
+                        done
+
+                        echo "APP=$STATUS_APP GW=$STATUS_GW HTTP=$HTTP_STATUS"
+
+                        if [ "$STATUS_APP" != "healthy" ] || \
+                        [ "$STATUS_GW" != "true" ] || \
+                        [ "$HTTP_STATUS" != "200" ]; then
 
                             echo "❌ DEPLOY FAIL → ROLLBACK"
-
-                            docker compose down
-
-                            docker tag ${APP_IMAGE}:backup ${APP_IMAGE}:latest || true
-                            docker tag ${GW_IMAGE}:backup  ${GW_IMAGE}:latest  || true
-
-                            docker compose up -d
                             exit 1
                         fi
 
