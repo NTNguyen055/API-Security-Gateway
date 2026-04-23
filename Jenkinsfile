@@ -31,7 +31,7 @@ pipeline {
                              -t ${APP_IMAGE}:latest \
                              ./docappsystem
 
-                docker build --no-cache \
+                docker build \
                              -t ${GW_IMAGE}:${IMAGE_TAG} \
                              -t ${GW_IMAGE}:latest \
                              ./nginx
@@ -51,6 +51,13 @@ pipeline {
                     -e DB_NAME=/tmp/test.db \
                     ${APP_IMAGE}:${IMAGE_TAG} \
                     python manage.py test --verbosity=2
+                """
+
+                // Kiểm tra TEST
+                sh """
+                TEST_COUNT=\$(docker run --rm \
+                    ${APP_IMAGE}:${IMAGE_TAG} \
+                    python manage.py test --verbosity=1 2>&1 | grep -c "Ran 0 tests")
                 """
             }
         }
@@ -72,6 +79,8 @@ pipeline {
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} '
+                        set -e
+
                         mkdir -p ${BASE_DIR}
 
                         echo "--- [1] PULL CODE ---"
@@ -88,7 +97,7 @@ pipeline {
                             exit 1
                         fi
 
-                        echo "--- [2] BACKUP CURRENT VERSION ---"
+                        echo "--- [2] BACKUP IMAGE ---"
                         docker tag ${APP_IMAGE}:latest ${APP_IMAGE}:backup || true
                         docker tag ${GW_IMAGE}:latest  ${GW_IMAGE}:backup  || true
 
@@ -97,22 +106,23 @@ pipeline {
                         docker compose --env-file ${ENV_PATH} up -d --remove-orphans
 
                         echo "--- [4] WAIT ---"
-                        sleep 20
+                        sleep 25
 
-                        STATUS_APP=\$(docker inspect -f "{{.State.Running}}" docapp_django || echo "false")
+                        echo "--- [5] HEALTH CHECK ---"
+                        STATUS_APP=\$(docker inspect -f "{{.State.Health.Status}}" docapp_django || echo "unhealthy")
                         STATUS_GW=\$(docker inspect -f "{{.State.Running}}" openresty_gateway || echo "false")
 
-                        # Test pipeline thật (qua HTTPS → chạy Lua)
-                        HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" \
-                            https://localhost/ || echo "000")
+                        HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost/ || echo "000")
 
                         echo "APP=\$STATUS_APP GW=\$STATUS_GW HTTP=\$HTTP_STATUS"
 
-                        if [ "\$STATUS_APP" != "true" ] || [ "\$STATUS_GW" != "true" ] || \
-                            { [ "\$HTTP_STATUS" != "200" ] && \
-                                [ "\$HTTP_STATUS" != "301" ] && \
-                                [ "\$HTTP_STATUS" != "302" ]; }; then
-                            echo "DEPLOY FAIL → ROLLBACK"
+                        if [ "\$STATUS_APP" != "healthy" ] || \
+                           [ "\$STATUS_GW" != "true" ] || \
+                           { [ "\$HTTP_STATUS" != "200" ] && \
+                             [ "\$HTTP_STATUS" != "301" ] && \
+                             [ "\$HTTP_STATUS" != "302" ]; }; then
+
+                            echo "❌ DEPLOY FAIL → ROLLBACK"
 
                             docker compose down
 
@@ -123,7 +133,8 @@ pipeline {
                             exit 1
                         fi
 
-                        echo "DEPLOY SUCCESS: ${IMAGE_TAG}"
+                        echo "✅ DEPLOY SUCCESS: ${IMAGE_TAG}"
+
                         docker image prune -f
                     '
                     """

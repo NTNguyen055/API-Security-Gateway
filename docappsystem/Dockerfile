@@ -18,8 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-RUN pip install --upgrade pip
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+RUN pip install --upgrade pip \
+ && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
 
 # =========================
 # STAGE 2: Runtime
@@ -32,22 +33,39 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PYTHONUNBUFFERED=1
 
+# 🔥 TỐI ƯU: giảm bytecode size
+ENV PYTHONOPTIMIZE=1
+
+# 🔥 chỉ giữ runtime dependency (nhẹ hơn)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    default-libmysqlclient-dev \
+    libmariadb3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir /wheels/*
+RUN pip install --no-cache-dir /wheels/* \
+ && rm -rf /wheels
 
 COPY . .
 
+# 🔥 COLLECT STATIC (nếu dùng Django static)
+RUN python manage.py collectstatic --noinput
+
+# 🔥 SECURITY: chạy non-root
+RUN useradd -m appuser
+USER appuser
+
 EXPOSE 8000
 
+# 🔥 HEALTHCHECK
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD \
+  curl -f http://localhost:8000/health/ || exit 1
+
+# 🔥 GUNICORN (tuned)
 CMD ["gunicorn", "docappsystem.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
-     "--workers", "2", \
+     "--workers", "3", \
      "--threads", "2", \
-     "--timeout", "60"]
+     "--timeout", "90"]

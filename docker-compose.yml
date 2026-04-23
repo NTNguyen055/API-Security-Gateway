@@ -6,13 +6,17 @@ services:
     image: ntnguyen055/api-security-app:latest
     container_name: docapp_django
     restart: always
+
     expose:
       - "8000"
+
     env_file:
       - /home/ubuntu/appointment-web/.env
+
     depends_on:
       redis:
         condition: service_healthy
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 15s
@@ -20,36 +24,51 @@ services:
       retries: 3
       start_period: 20s
 
+
   redis:
     image: redis:7-alpine
     container_name: docapp_redis
     restart: always
+
     command: >
       redis-server
       --maxmemory 50mb
       --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
 
+
   gateway:
     image: ntnguyen055/api-security-gateway:latest
     container_name: openresty_gateway
     restart: always
+
     ports:
       - "80:80"
       - "443:443"
-      # Port 9145 KHÔNG expose ra ngoài — chỉ dùng qua SSH Tunnel
-      # Tunnel lệnh: ssh -N -L 9145:localhost:9145 ubuntu@EC2_IP
+      # 🔥 FIX QUAN TRỌNG: chỉ mở local EC2
+      - "127.0.0.1:9145:9145"
+
     env_file:
       - /home/ubuntu/appointment-web/.env
+
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/html:/var/www/html:ro
+
     depends_on:
       app:
         condition: service_healthy
+
+    # 🔥 THÊM healthcheck cho gateway
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health/"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
