@@ -43,6 +43,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # Port 9145 KHÔNG expose ra ngoài — chỉ dùng qua SSH Tunnel
+      # Tunnel lệnh: ssh -N -L 9145:localhost:9145 ubuntu@EC2_IP
     env_file:
       - /home/ubuntu/appointment-web/.env
     volumes:
