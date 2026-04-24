@@ -27,7 +27,7 @@ function _M.run()
 
     if get_err then
         ngx.log(ngx.ERR, "[BLACKLIST] Redis error: ", get_err)
-        red:set_keepalive(10000, 100, "redis_pool")
+        red:set_keepalive(10000, 100)
         return nil
     end
 

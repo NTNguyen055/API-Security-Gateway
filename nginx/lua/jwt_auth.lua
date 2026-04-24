@@ -36,7 +36,7 @@ function _M.run()
         return 401
     end
 
-    local m = ngx.re.match(auth_header, [[^Bearer\s+([A-Za-z0-9\-\._]+)$]], "jo")
+    local m = ngx.re.match(auth_header, [[^Bearer\s+([A-Za-z0-9\-\._~\+\/]+=*)$]], "jo")
     if not m then
         return 401
     end

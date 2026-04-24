@@ -27,7 +27,7 @@ ALLOWED_HOSTS = [
 
 # fallback an toàn khi dev lỗi .env
 if not ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ["*"]
+    raise ImproperlyConfigured("ALLOWED_HOSTS is not set in .env")
     
 # ================= HEALTH CHECK + NGINX PROXY =================
 CSRF_TRUSTED_ORIGINS = [
