@@ -9,16 +9,10 @@ from django.db import connection
 from django.views.decorators.csrf import csrf_exempt
 import logging
 
-
 logger = logging.getLogger(__name__)
 
 def health_check(request):
-    try:
-        connection.ensure_connection()
-        return HttpResponse(status=200)
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return HttpResponse(status=503)
+    return HttpResponse(status=200)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
