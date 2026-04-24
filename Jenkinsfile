@@ -8,7 +8,7 @@ pipeline {
 
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
-        EC2_APP_IP      = '35.78.233.182'
+        EC2_APP_IP      = '35.77.34.114'
         EC2_USER        = 'ubuntu'
     }
 
