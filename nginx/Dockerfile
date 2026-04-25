@@ -15,6 +15,12 @@ ENV LUA_LIB_DIR=/usr/local/openresty/lualib \
 # ================= DIR =================
 RUN mkdir -p $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
 
+# ================= INSTALL LUA DEPS VIA OPM =================
+# lua-resty-hmac là dependency bắt buộc của lua-resty-jwt
+RUN opm get jkeys089/lua-resty-hmac \
+ && opm get SkyLothar/lua-resty-jwt \
+ && opm get spacewander/lua-resty-string
+
 # ================= COPY (NO GIT CLONE) =================
 # 👉 deterministic build
 COPY lualib/ $LUA_LIB_DIR/
@@ -23,12 +29,12 @@ COPY geoip/  $GEOIP_DIR/
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 
 # ================= CLEANUP =================
-# Xóa file .md nếu còn sót (giảm image size)
 RUN find $LUA_LIB_DIR -name "*.md" -delete
 
 # ================= VERIFY (FAIL FAST) =================
 RUN /usr/local/openresty/bin/resty -e "require 'cjson'; print('cjson OK')" \
  && /usr/local/openresty/bin/resty -e "require 'resty.redis'; print('redis OK')" \
+ && /usr/local/openresty/bin/resty -e "require 'resty.hmac'; print('hmac OK')" \
  && /usr/local/openresty/bin/resty -e "require 'resty.jwt'; print('jwt OK')" \
  && /usr/local/openresty/bin/resty -e "require 'resty.limit.req'; print('limit OK')" \
  && /usr/local/openresty/bin/resty -e "require 'resty.maxminddb'; print('maxmind OK')"
