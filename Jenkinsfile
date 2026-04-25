@@ -106,31 +106,31 @@ mkdir -p "$BASE_DIR"
 echo "===== [1] SYNC CODE ====="
 
 if [ ! -d "$APP_DIR" ]; then
-git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
+    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
 else
-cd "$APP_DIR"
-git fetch origin
-git reset --hard origin/main
-git clean -fd
+    cd "$APP_DIR"
+    git fetch origin
+    git reset --hard origin/main
+    git clean -fd
 fi
 
 cd "$APP_DIR"
 
 if [ ! -f "$ENV_PATH" ]; then
-echo "ERROR: .env not found"
-exit 1
+    echo "ERROR: .env not found"
+    exit 1
 fi
 
 echo "===== [2] BACKUP IMAGE ====="
-docker tag "$APP_IMAGE" "$APP_IMAGE" 2>/dev/null || true
-docker tag "$GW_IMAGE" "$GW_IMAGE" 2>/dev/null || true
+docker tag "$APP_IMAGE:latest" "$APP_IMAGE:backup" 2>/dev/null || true
+docker tag "$GW_IMAGE:latest"  "$GW_IMAGE:backup"  2>/dev/null || true
 
 echo "===== [3] DEPLOY ====="
 docker compose --env-file "$ENV_PATH" pull
 docker compose --env-file "$ENV_PATH" up -d --remove-orphans
 
-echo "WAITING CONTAINERS..."
-sleep 15
+echo "Waiting 30s for all containers to be fully ready..."
+sleep 30
 
 echo "===== [4] DJANGO INIT (migrate + collectstatic) ====="
 
@@ -143,36 +143,44 @@ echo "===== [5] HEALTH CHECK ====="
 
 HTTP_STATUS="000"
 
-for i in {1..10}; do
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
---max-time 5 \
---connect-timeout 3 \
--A "HealthChecker/1.0" \
--H "Host: dacn3.duckdns.org" \
-http://127.0.0.1/health/ || echo "000")
+for i in $(seq 1 15); do
+    # Tach curl ra bien rieng, tranh loi ket qua bi noi chuoi
+    CURL_OUT=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 8 \
+        --connect-timeout 5 \
+        -A "HealthChecker/1.0" \
+        -H "Host: dacn3.duckdns.org" \
+        "http://127.0.0.1/health/" 2>/dev/null) || CURL_OUT="000"
 
-echo "Attempt $i → HTTP=$HTTP_STATUS"
+    HTTP_STATUS="$CURL_OUT"
+    echo "Attempt $i → HTTP=$HTTP_STATUS"
 
-if [ "$HTTP_STATUS" = "200" ]; then
-    break
-fi
+    if [ "$HTTP_STATUS" = "200" ]; then
+        break
+    fi
 
-sleep 5
+    # In log de debug neu con that bai sau 3 lan
+    if [ "$i" = "3" ]; then
+        echo "--- Container status ---"
+        docker ps --format "table {{.Names}}\t{{.Status}}" || true
+        echo "--- Gateway logs (last 20 lines) ---"
+        docker logs "$GW_CONTAINER" --tail=20 2>&1 || true
+    fi
 
+    sleep 8
 done
 
 if [ "$HTTP_STATUS" != "200" ]; then
-echo "DEPLOY FAILED → ROLLBACK"
+    echo "DEPLOY FAILED → ROLLBACK"
 
-docker compose --env-file "$ENV_PATH" down
+    docker compose --env-file "$ENV_PATH" down
 
-docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest" 2>/dev/null || true
-docker tag "$GW_IMAGE:backup"  "$GW_IMAGE:latest"  2>/dev/null || true
+    docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest" 2>/dev/null || true
+    docker tag "$GW_IMAGE:backup"  "$GW_IMAGE:latest"  2>/dev/null || true
 
-docker compose --env-file "$ENV_PATH" up -d
+    docker compose --env-file "$ENV_PATH" up -d
 
-exit 1
-
+    exit 1
 fi
 
 echo "DEPLOY SUCCESS"
