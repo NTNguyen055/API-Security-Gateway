@@ -49,7 +49,13 @@ RUN git clone --depth 1 https://github.com/openresty/lua-resty-limit-traffic.git
 
 # ================= CONFIG =================
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+
+# Copy tất cả Lua modules (bao gồm geo_block.lua và rate_limit_redis.lua mới)
 COPY lua/ /usr/local/openresty/nginx/lua/
+
+# ================= VERIFY =================
+# Kiểm tra cjson có sẵn trong OpenResty (dùng bởi geo_block.lua)
+RUN /usr/local/openresty/bin/resty -e "require 'cjson'; print('cjson OK')"
 
 # ================= PERMISSIONS =================
 RUN chmod -R 755 /usr/local/openresty/lualib
