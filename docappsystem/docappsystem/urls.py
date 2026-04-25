@@ -1,75 +1,125 @@
 from django.contrib import admin
 from django.urls import path
-from .import views,adminviews,docviews,userviews
-from django.conf.urls.static import static
 from django.conf import settings
-from django.urls import path, include
-from django.http import HttpResponse 
-from django.db import connection
+from django.conf.urls.static import static
 from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
+
+from . import views, adminviews, docviews, userviews
+
 import logging
 
 logger = logging.getLogger(__name__)
 
+
+# =========================
+# Health Check
+# =========================
 def health_check(request):
-    return HttpResponse(status=200)
+    return HttpResponse("OK", status=200)
 
+
+# =========================
+# URL Patterns
+# =========================
 urlpatterns = [
+
+    # -------------------------
+    # Admin
+    # -------------------------
     path('admin/', admin.site.urls),
+
     path('base/', views.BASE, name='base'),
-    path('login', views.LOGIN, name='login'),
-    
-    path('doLogin', views.doLogin, name='doLogin'),
-    path('doLogout', views.doLogout, name='logout'),
 
-    path('health/', csrf_exempt(health_check)),
+    # -------------------------
+    # Authentication
+    # -------------------------
+    path('login/', views.LOGIN, name='login'),
+    path('login/submit/', views.doLogin, name='do_login'),
+    path('logout/', views.doLogout, name='logout'),
 
-    # This is admin panel
-    path('Admin/AdminHome', adminviews.ADMINHOME, name='admin_home'),
-    path('Admin/Specialization', adminviews.SPECIALIZATION, name='add_specilizations'),
-    path('Admin/ManageSpecialization', adminviews.MANAGESPECIALIZATION, name='manage_specilizations'),
-    path('Admin/DeleteSpecialization/<str:id>', adminviews.DELETE_SPECIALIZATION, name='delete_specilizations'),
-    path('UpdateSpecialization/<str:id>', adminviews.UPDATE_SPECIALIZATION, name='update_specilizations'),
-    path('UPDATE_Specialization_DETAILS', adminviews.UPDATE_SPECIALIZATION_DETAILS, name='update_specilizations_details'),
-    path('Admin/DoctorList', adminviews.DoctorList, name='viewdoctorlist'),
-    path('Admin/ViewDoctorDetails/<str:id>', adminviews.ViewDoctorDetails, name='viewdoctordetails'),
-    path('Admin/ViewDoctorAppointmentList/<str:id>', adminviews.ViewDoctorAppointmentList, name='viewdoctorappointmentlist'),
-    path('Admin/ViewPatientDetails/<str:id>', adminviews.ViewPatientDetails, name='viewpatientdetails'),
-    path('SearchDoctor', adminviews.Search_Doctor, name='search_doctor'),
+    # -------------------------
+    # Health
+    # -------------------------
+    path('health/', health_check),
 
-    path('DoctorBetweenDateReport', adminviews.Doctor_Between_Date_Report, name='doctor_between_date_report'),
+    # =========================
+    # ADMIN PANEL
+    # =========================
+    path('admin/dashboard/', adminviews.ADMINHOME, name='admin_home'),
 
-    #Website Page
-    path('Website/update', adminviews.WEBSITE_UPDATE, name='website_update'),
-    path('UPDATE_WEBSITE_DETAILS', adminviews.UPDATE_WEBSITE_DETAILS, name='update_website_details'),
+    path('admin/specializations/', adminviews.SPECIALIZATION, name='add_specialization'),
+    path('admin/specializations/manage/', adminviews.MANAGESPECIALIZATION, name='manage_specialization'),
+    path('admin/specializations/<str:id>/delete/', adminviews.DELETE_SPECIALIZATION, name='delete_specialization'),
+    path('admin/specializations/<str:id>/update/', adminviews.UPDATE_SPECIALIZATION, name='update_specialization'),
+    path('admin/specializations/update/submit/', adminviews.UPDATE_SPECIALIZATION_DETAILS, name='update_specialization_details'),
 
-    # This is Doctor Panel
-    path('docsignup/', docviews.DOCSIGNUP, name='docsignup'),
-    path('Doctor/DocHome', docviews.DOCTORHOME, name='doctor_home'),
-    path('Doctor/ViewAppointment', docviews.View_Appointment, name='view_appointment'),
-    path('DoctorPatientAppointmentDetails/<str:id>', docviews.Patient_Appointment_Details, name='patientappointmentdetails'),
-    path('AppointmentDetailsRemark/Update', docviews.Patient_Appointment_Details_Remark, name='patient_appointment_details_remark'),
-    path('DoctorPatientApprovedAppointment', docviews.Patient_Approved_Appointment, name='patientapprovedappointment'),
-    path('DoctorPatientCancelledAppointment', docviews.Patient_Cancelled_Appointment, name='patientcancelledappointment'),
-    path('DoctorPatientNewAppointment', docviews.Patient_New_Appointment, name='patientnewappointment'),
-    path('DoctorPatientListApprovedAppointment', docviews.Patient_List_Approved_Appointment, name='patientlistappointment'),
-    path('DoctorAppointmentList/<str:id>', docviews.DoctorAppointmentList, name='doctorappointmentlist'),
-    path('PatientAppointmentPrescription', docviews.Patient_Appointment_Prescription, name='patientappointmentprescription'),
-    path('PatientAppointmentCompleted', docviews.Patient_Appointment_Completed, name='patientappointmentcompleted'),
-    path('SearchAppointment', docviews.Search_Appointments, name='search_appointment'),
-    path('BetweenDateReport', docviews.Between_Date_Report, name='between_date_report'),
+    path('admin/doctors/', adminviews.DoctorList, name='doctor_list'),
+    path('admin/doctors/<str:id>/', adminviews.ViewDoctorDetails, name='doctor_detail'),
+    path('admin/doctors/<str:id>/appointments/', adminviews.ViewDoctorAppointmentList, name='doctor_appointments'),
+    path('admin/patients/<str:id>/', adminviews.ViewPatientDetails, name='patient_detail'),
 
-    #This is User Panel
-    path('userbase/', userviews.USERBASE, name='userbase'),
+    path('admin/search/doctor/', adminviews.Search_Doctor, name='search_doctor'),
+    path('admin/reports/doctor/date-range/', adminviews.Doctor_Between_Date_Report, name='doctor_date_report'),
+
+    # Website config
+    path('admin/website/', adminviews.WEBSITE_UPDATE, name='website_update'),
+    path('admin/website/update/', adminviews.UPDATE_WEBSITE_DETAILS, name='update_website'),
+
+    # =========================
+    # DOCTOR PANEL
+    # =========================
+    path('doctor/signup/', docviews.DOCSIGNUP, name='doctor_signup'),
+    path('doctor/dashboard/', docviews.DOCTORHOME, name='doctor_home'),
+
+    path('doctor/appointments/', docviews.View_Appointment, name='view_appointments'),
+    path('doctor/appointments/<str:id>/', docviews.Patient_Appointment_Details, name='appointment_detail'),
+
+    path('doctor/appointments/remark/update/', docviews.Patient_Appointment_Details_Remark,
+         name='appointment_remark_update'),
+
+    path('doctor/appointments/status/approved/', docviews.Patient_Approved_Appointment,
+         name='approved_appointments'),
+
+    path('doctor/appointments/status/cancelled/', docviews.Patient_Cancelled_Appointment,
+         name='cancelled_appointments'),
+
+    path('doctor/appointments/status/new/', docviews.Patient_New_Appointment,
+         name='new_appointments'),
+
+    path('doctor/appointments/list/approved/', docviews.Patient_List_Approved_Appointment,
+         name='approved_appointment_list'),
+
+    path('doctor/<str:id>/appointments/', docviews.DoctorAppointmentList, name='doctor_appointment_list'),
+
+    path('doctor/prescriptions/', docviews.Patient_Appointment_Prescription, name='prescription'),
+    path('doctor/appointments/completed/', docviews.Patient_Appointment_Completed, name='completed_appointments'),
+
+    path('doctor/search/appointments/', docviews.Search_Appointments, name='search_appointments'),
+    path('doctor/reports/date-range/', docviews.Between_Date_Report, name='doctor_date_report'),
+
+    # =========================
+    # USER PANEL
+    # =========================
     path('', userviews.Index, name='index'),
-    
-    path('userappointment/', userviews.create_appointment, name='appointment'),
-    path('User_SearchAppointment', userviews.User_Search_Appointments, name='user_search_appointment'),
-    path('ViewAppointmentDetails/<str:id>/', userviews.View_Appointment_Details, name='viewappointmentdetails'),
-    
-    #profile path
-    path('Profile', views.PROFILE, name='profile'),
-    path('Profile/update', views.PROFILE_UPDATE, name='profile_update'),
-    path('Password', views.CHANGE_PASSWORD, name='change_password'),
-    
-]+ static(settings.MEDIA_URL, document_root = settings.MEDIA_ROOT)
+
+    path('user/base/', userviews.USERBASE, name='user_base'),
+    path('user/appointment/create/', userviews.create_appointment, name='create_appointment'),
+    path('user/appointment/search/', userviews.User_Search_Appointments, name='user_search_appointment'),
+
+    path('user/appointment/<str:id>/', userviews.View_Appointment_Details, name='user_appointment_detail'),
+
+    # =========================
+    # PROFILE
+    # =========================
+    path('profile/', views.PROFILE, name='profile'),
+    path('profile/update/', views.PROFILE_UPDATE, name='profile_update'),
+    path('profile/password/', views.CHANGE_PASSWORD, name='change_password'),
+
+]
+
+# =========================
+# Media (Dev only)
+# =========================
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

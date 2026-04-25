@@ -5,7 +5,7 @@ services:
   app:
     image: ntnguyen055/api-security-app:latest
     container_name: docapp_django
-    restart: always
+    restart: unless-stopped
 
     expose:
       - "8000"
@@ -13,29 +13,41 @@ services:
     env_file:
       - /home/ubuntu/appointment-web/.env
 
+    networks:
+      - backend
+
     depends_on:
       redis:
         condition: service_healthy
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
+      interval: 10s
+      timeout: 3s
+      retries: 5
       start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 
   redis:
     image: redis:7-alpine
     container_name: docapp_redis
-    restart: always
+    restart: unless-stopped
 
     command: >
       redis-server
-      --maxmemory 50mb
+      --maxmemory 100mb
       --maxmemory-policy allkeys-lru
-      --save ""
-      --appendonly no
+      --appendonly yes
+      --appendfsync everysec
+
+    networks:
+      - backend
 
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -43,16 +55,21 @@ services:
       timeout: 3s
       retries: 3
 
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 
   gateway:
     image: ntnguyen055/api-security-gateway:latest
     container_name: openresty_gateway
-    restart: always
+    restart: unless-stopped
 
     ports:
-      - "80:80"
-      - "443:443"
-      # Chỉ mở local EC2
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
       - "127.0.0.1:9145:9145"
 
     env_file:
@@ -62,18 +79,35 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/html:/var/www/html:ro
 
+    networks:
+      - backend
+
     depends_on:
       app:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
-    # ✅ FIX: dùng User-Agent tùy chỉnh để tránh bad_bot.lua
-    # nginx.conf trả 200 thẳng tại /health/ không qua Lua
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
     healthcheck:
       test: ["CMD", "curl", "-sf",
              "-A", "HealthChecker/1.0",
-             "-H", "Host: dacn3.duckdns.org",
-             "http://localhost/health/"]
+             "http://127.0.0.1/health/"]
       interval: 20s
       timeout: 5s
       retries: 3
       start_period: 15s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  backend:
+    driver: bridge

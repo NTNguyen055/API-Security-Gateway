@@ -1,85 +1,141 @@
 local _M = {}
 
--- SQLi patterns (SAFE VERSION - giảm false positive)
+-- ================= CONFIG =================
+
+-- SQLi patterns (tối ưu, tránh false positive)
 local sqli_pattern = [[
-(\bunion\s+select\b)|
-(\bselect\b.+\bfrom\b.+\bwhere\b)|
-(\binsert\s+into\b)|
-(\bdelete\s+from\b)|
-(\bdrop\s+table\b)|
-(\bupdate\b.+\bset\b)
+(\bunion\b.{0,20}\bselect\b)|
+(\bselect\b.{0,50}\bfrom\b.{0,50}\bwhere\b)|
+(\binsert\b.{0,20}\binto\b)|
+(\bdelete\b.{0,20}\bfrom\b)|
+(\bdrop\b.{0,20}\btable\b)|
+(\bupdate\b.{0,20}\bset\b)|
+(\bor\b\s+\d+=\d+)|
+(\band\b\s+\d+=\d+)
 ]]
 
--- XSS patterns (giữ nguyên nhưng tối ưu nhẹ)
+-- XSS patterns (anti bypass tốt hơn)
 local xss_pattern = [[
 (<script\b)|
 (javascript\s*:)|
 (onerror\s*=)|
 (onload\s*=)|
 (<svg\b)|
-(<img\b.*onerror)
+(<img\b[^>]*onerror)|
+(document\.cookie)|
+(alert\s*\()
 ]]
 
-local function normalize(input)
+-- Risk scoring
+local SCORE_SQLI      = 40
+local SCORE_XSS       = 40
+local SCORE_SUSPICIOUS= 15
+
+-- ================= NORMALIZE =================
+
+local function deep_normalize(input)
     if not input then return "" end
-    input = ngx.unescape_uri(input)
-    return string.lower(input)
+
+    -- decode URL nhiều lần (anti double encoding)
+    for _ = 1, 3 do
+        input = ngx.unescape_uri(input)
+    end
+
+    -- lowercase
+    input = string.lower(input)
+
+    -- remove null byte
+    input = input:gsub("%z", "")
+
+    -- collapse spaces
+    input = input:gsub("%s+", " ")
+
+    return input
 end
 
-local function check(value, ip)
-    local v = normalize(value)
+-- ================= CORE CHECK =================
 
-    -- SQLi check
+local function check_value(value, ip)
+    local v = deep_normalize(value)
+
+    -- SQLi detection
     if ngx.re.find(v, sqli_pattern, "jo") then
-        ngx.log(ngx.WARN, "[WAF][SQLi] Blocked IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"waf_sqli"}) end
-        return 403
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SQLI
+        table.insert(ngx.ctx.flags, "sqli")
+
+        ngx.log(ngx.WARN, "[WAF][SQLi] IP=", ip,
+                " score=", ngx.ctx.risk_score,
+                " payload=", v)
+
+        return
     end
 
-    -- XSS check
+    -- XSS detection
     if ngx.re.find(v, xss_pattern, "jo") then
-        ngx.log(ngx.WARN, "[WAF][XSS] Blocked IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"waf_xss"}) end
-        return 403
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_XSS
+        table.insert(ngx.ctx.flags, "xss")
+
+        ngx.log(ngx.WARN, "[WAF][XSS] IP=", ip,
+                " score=", ngx.ctx.risk_score,
+                " payload=", v)
+
+        return
     end
 
-    return nil
+    -- Suspicious encoding / obfuscation
+    if ngx.re.find(v, [[(%27|%22|%3c|%3e)]], "jo") then
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SUSPICIOUS
+        table.insert(ngx.ctx.flags, "encoded_payload")
+    end
 end
+
+-- ================= MAIN =================
 
 function _M.run()
-    local ip = ngx.var.remote_addr
+    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
 
-    -- 1. URI
+    -- init context
+    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
+    ngx.ctx.flags      = ngx.ctx.flags or {}
+
+    -- ================= 1. URI =================
     local uri = ngx.var.request_uri
-    local code = check(uri, ip)
-    if code then return code end
+    if uri then
+        check_value(uri, ip)
+    end
 
-    -- 2. Query args
+    -- ================= 2. QUERY =================
     local args = ngx.req.get_uri_args()
+
     for _, v in pairs(args) do
         if type(v) == "table" then
             for _, vv in ipairs(v) do
-                local code = check(vv, ip)
-                if code then return code end
+                check_value(vv, ip)
             end
         else
-            local code = check(v, ip)
-            if code then return code end
+            check_value(v, ip)
         end
     end
 
-    -- 3. Body
+    -- ================= 3. BODY =================
     local method = ngx.req.get_method()
-    if method == "POST" or method == "PUT" then
+
+    if method == "POST" or method == "PUT" or method == "PATCH" then
         ngx.req.read_body()
 
         local body = ngx.req.get_body_data()
         if body then
-            local code = check(body, ip)
-            if code then return code end
+            -- tránh scan body quá lớn (DoS protection)
+            if #body < 8192 then
+                check_value(body, ip)
+            else
+                ngx.log(ngx.WARN, "[WAF] Skip large body IP=", ip)
+            end
         end
     end
 
+    -- ================= FINAL =================
+    -- ❗ không block ở đây → pipeline quyết định
     return nil
 end
 

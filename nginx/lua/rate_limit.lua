@@ -2,15 +2,33 @@ local _M = {}
 
 local lim
 
+-- ================= CONFIG =================
+
+local RATE  = tonumber(os.getenv("RATE_LIMIT_RPS"))   or 10
+local BURST = tonumber(os.getenv("RATE_LIMIT_BURST")) or 20
+
+-- Auto blacklist
+local AUTO_BL_THRESHOLD = tonumber(os.getenv("AUTO_BL_THRESHOLD")) or 5
+local AUTO_BL_WINDOW    = tonumber(os.getenv("AUTO_BL_WINDOW"))    or 60
+local AUTO_BL_DURATION  = tonumber(os.getenv("AUTO_BL_DURATION"))  or 3600
+
+-- Risk scoring
+local SCORE_BURST        = 10
+local SCORE_HARD_REJECT  = 30
+
+-- Whitelist IP
+local WHITELIST_IPS = {
+    ["127.0.0.1"] = true,
+}
+
+-- ================= LIMITER =================
+
 local function get_limiter()
     if lim then return lim end
 
     local limit_req = require "resty.limit.req"
 
-    local rate  = tonumber(os.getenv("RATE_LIMIT_RPS"))   or 10
-    local burst = tonumber(os.getenv("RATE_LIMIT_BURST")) or 20
-
-    local l, err = limit_req.new("limit_req_store", rate, burst)
+    local l, err = limit_req.new("limit_req_store", RATE, BURST)
     if not l then
         ngx.log(ngx.ERR, "[RATE_LIMIT] Init failed: ", err)
         return nil
@@ -20,104 +38,107 @@ local function get_limiter()
     return lim
 end
 
--- ✅ AUTO-BLACKLIST config (đọc từ .env, có fallback)
-local AUTO_BL_THRESHOLD = tonumber(os.getenv("AUTO_BL_THRESHOLD")) or 5
-local AUTO_BL_WINDOW    = tonumber(os.getenv("AUTO_BL_WINDOW"))    or 60   -- giây đếm
-local AUTO_BL_DURATION  = tonumber(os.getenv("AUTO_BL_DURATION"))  or 3600 -- giây block
+-- ================= AUTO BLACKLIST =================
 
 local function auto_blacklist(ip)
     local counter_store = ngx.shared.rl_counter
-    if not counter_store then
-        ngx.log(ngx.ERR, "[AUTO_BL] Missing shared dict 'rl_counter' in nginx.conf")
-        return
-    end
+    if not counter_store then return end
 
-    -- Tăng counter, tự expire sau AUTO_BL_WINDOW giây
     local count, err = counter_store:incr("rl:" .. ip, 1, 0, AUTO_BL_WINDOW)
     if not count then
         ngx.log(ngx.ERR, "[AUTO_BL] Counter error: ", err)
         return
     end
 
-    ngx.log(ngx.INFO, "[AUTO_BL] IP: ", ip, " reject_count=", count,
-            "/", AUTO_BL_THRESHOLD)
+    ngx.log(ngx.INFO, "[AUTO_BL] IP=", ip,
+            " reject_count=", count, "/", AUTO_BL_THRESHOLD)
 
-    -- Chưa đủ ngưỡng → bỏ qua
     if count < AUTO_BL_THRESHOLD then
         return
     end
 
-    -- ✅ Đủ ngưỡng → ghi vào L1 shared memory NGAY (non-blocking, ~0ms)
+    -- L1 cache
     local bl_cache = ngx.shared.ip_blacklist
     if bl_cache then
         bl_cache:set(ip, true, AUTO_BL_DURATION)
     end
 
-    -- ✅ Ghi vào Redis qua ngx.timer (non-blocking, không treo worker)
-    local ok, timer_err = ngx.timer.at(0, function(premature, target_ip, duration)
+    -- Async Redis
+    ngx.timer.at(0, function(premature, target_ip, duration)
         if premature then return end
 
         local redis = require "resty.redis"
         local red = redis:new()
         red:set_timeouts(500, 500, 500)
 
-        local conn_ok, conn_err = red:connect("redis", 6379)
-        if not conn_ok then
-            ngx.log(ngx.ERR, "[AUTO_BL] Redis connect failed: ", conn_err)
+        local ok, err = red:connect("redis", 6379)
+        if not ok then
+            ngx.log(ngx.ERR, "[AUTO_BL] Redis connect failed: ", err)
             return
         end
 
-        -- Thêm vào Set blacklist_ips (dùng chung với ip_blacklist.lua)
-        red:sadd("blacklist_ips", target_ip)
-        -- Lưu thời điểm bị block để audit
-        red:set("bl_time:" .. target_ip, ngx.time(), "EX", duration)
+        red:set("bl:" .. target_ip, 1, "EX", duration)
 
         red:set_keepalive(10000, 100)
 
-        ngx.log(ngx.WARN, "[AUTO_BL] *** IP AUTO-BLACKLISTED: ", target_ip,
-                " | duration=", duration, "s ***")
-
-        if metric_blocked then
-            metric_blocked:inc(1, {"auto_blacklist"})
-        end
+        ngx.log(ngx.WARN, "[AUTO_BL] BLACKLISTED IP=", target_ip,
+                " duration=", duration)
     end, ip, AUTO_BL_DURATION)
 
-    if not ok then
-        ngx.log(ngx.ERR, "[AUTO_BL] Timer failed: ", timer_err)
-    end
-
-    -- Reset counter để tránh trigger lại ngay
-    counter_store:delete("rl:" .. ip)
+    -- reset counter nhẹ (không delete hoàn toàn)
+    counter_store:set("rl:" .. ip, 0, AUTO_BL_WINDOW)
 end
+
+-- ================= CORE =================
 
 function _M.run()
     local limiter = get_limiter()
     if not limiter then return nil end  -- fail-open
 
-    local ip  = ngx.var.remote_addr
-    local key = ngx.var.binary_remote_addr
+    -- 🔥 unified IP
+    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
+
+    -- init scoring context
+    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
+    ngx.ctx.flags      = ngx.ctx.flags or {}
+
+    -- whitelist
+    if WHITELIST_IPS[ip] then
+        return nil
+    end
+
+    -- key nâng cao (IP + UA)
+    local ua = ngx.var.http_user_agent or ""
+    local key = ip .. ":" .. ua
 
     local delay, err = limiter:incoming(key, true)
 
     if not delay then
         if err == "rejected" then
-            ngx.log(ngx.WARN, "[RATE_LIMIT] Hard reject IP: ", ip)
-            if metric_blocked then metric_blocked:inc(1, {"rate_limit_hard"}) end
+            ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_HARD_REJECT
+            table.insert(ngx.ctx.flags, "rate_limit_hard")
+
+            ngx.log(ngx.WARN, "[RATE_LIMIT] HARD REJECT IP=", ip,
+                    " score=", ngx.ctx.risk_score)
+
             auto_blacklist(ip)
-            return 429
+
+            -- ❗ không block ngay → để pipeline quyết định
+            return nil
         end
+
         ngx.log(ngx.ERR, "[RATE_LIMIT] Error: ", err)
-        return 500
+        return nil
     end
 
-    -- KHÔNG dùng ngx.sleep() — blocking I/O treo Nginx Worker
-    -- Mọi delay > 0 đều từ chối ngay: đề tài nhấn mạnh Non-blocking I/O
+    -- Burst handling (không block ngay)
     if delay > 0 then
-        ngx.log(ngx.WARN, "[RATE_LIMIT] Burst reject IP: ", ip,
-                " delay=", string.format("%.3f", delay))
-        if metric_blocked then metric_blocked:inc(1, {"rate_limit_burst"}) end
-        auto_blacklist(ip)
-        return 429
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_BURST
+        table.insert(ngx.ctx.flags, "rate_limit_burst")
+
+        ngx.log(ngx.INFO, "[RATE_LIMIT] Burst detected IP=", ip,
+                " delay=", string.format("%.3f", delay),
+                " score=", ngx.ctx.risk_score)
     end
 
     return nil
