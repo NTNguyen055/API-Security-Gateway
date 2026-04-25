@@ -18,8 +18,7 @@ RUN mkdir -p $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
 # ================= INSTALL LUA DEPS VIA OPM =================
 # lua-resty-hmac là dependency bắt buộc của lua-resty-jwt
 RUN opm get jkeys089/lua-resty-hmac \
- && opm get SkyLothar/lua-resty-jwt \
- && opm get spacewander/lua-resty-string
+ && opm get SkyLothar/lua-resty-jwt
 
 # ================= COPY (NO GIT CLONE) =================
 # 👉 deterministic build
