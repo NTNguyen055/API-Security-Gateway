@@ -1,7 +1,6 @@
 pipeline {
 agent any
 
-```
 options {
     timeout(time: 15, unit: 'MINUTES')
     timestamps()
@@ -137,8 +136,7 @@ echo "===== [4] DJANGO INIT (migrate + collectstatic) ====="
 
 docker exec "$APP_CONTAINER" python manage.py migrate --noinput
 
-collectstatic có thể fail nhẹ → không nên kill deploy
-
+# collectstatic co the fail nhe → khong nen kill deploy
 docker exec "$APP_CONTAINER" python manage.py collectstatic --noinput || true
 
 echo "===== [5] HEALTH CHECK ====="
@@ -146,11 +144,11 @@ echo "===== [5] HEALTH CHECK ====="
 HTTP_STATUS="000"
 
 for i in {1..10}; do
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}"
---max-time 5
---connect-timeout 3
--A "HealthChecker/1.0"
--H "Host: dacn3.duckdns.org"
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+--max-time 5 \
+--connect-timeout 3 \
+-A "HealthChecker/1.0" \
+-H "Host: dacn3.duckdns.org" \
 http://127.0.0.1/health/ || echo "000")
 
 echo "Attempt $i → HTTP=$HTTP_STATUS"
@@ -211,6 +209,4 @@ post {
         echo "Pipeline failed! Check logs."
     }
 }
-```
-
 }
