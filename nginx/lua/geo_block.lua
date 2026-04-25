@@ -11,14 +11,14 @@ local ALLOWED_COUNTRIES = {
     ["JP"] = true,
 }
 
-local CACHE_TTL       = 86400   
-local CACHE_TTL_FAIL  = 300     
+local CACHE_TTL       = 86400
+local CACHE_TTL_FAIL  = 300
 local SCORE_GEO_BLOCK = 50
 
 -- ================= INIT (ONCE PER WORKER) =================
 
-local geoip = nil
-local geoip_ready = false
+local geoip        = nil
+local geoip_ready  = false
 
 local function init_geoip()
     if geoip_ready then return true end
@@ -31,6 +31,8 @@ local function init_geoip()
 
     geoip = lib
 
+    -- v1.3.7 API: init nhận string path hoặc table {profile=path}
+    -- Khi nhận string, tự parse profile name từ filename
     local ok2, err = geoip.init(GEO_DB_PATH)
     if not ok2 then
         ngx.log(ngx.ERR, "[GEO] Failed to init DB: ", err)
@@ -39,7 +41,6 @@ local function init_geoip()
 
     geoip_ready = true
     ngx.log(ngx.NOTICE, "[GEO] GeoIP DB loaded successfully")
-
     return true
 end
 
@@ -52,14 +53,21 @@ local function get_country(ip)
         end
     end
 
-    local res, err = geoip.lookup(ip)
+    -- v1.3.7 API: lookup(ip, lookup_path, profile)
+    -- lookup_path = {"country","iso_code"} để lấy trực tiếp country code
+    -- Trả về value trực tiếp (string), không phải nested table
+    local res, err = geoip.lookup(ip, {"country", "iso_code"})
 
-    if not res then
-        ngx.log(ngx.ERR, "[GEO] Lookup failed: ", err)
+    if err then
+        -- "not found" là bình thường với private IP hoặc IP không có trong DB
+        if err ~= "not found" then
+            ngx.log(ngx.WARN, "[GEO] Lookup error for IP=", ip, " err=", err)
+        end
         return nil
     end
 
-    return res and res.country and res.country.iso_code
+    -- res là string country code trực tiếp (e.g. "VN") khi dùng lookup_path
+    return res
 end
 
 -- ================= MAIN =================
@@ -90,7 +98,6 @@ function _M.run()
         if cached == "ALLOW" then
             return nil
         else
-            -- blocked country cached
             ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_GEO_BLOCK
             table.insert(ngx.ctx.flags, "geo_block")
 
@@ -107,12 +114,9 @@ function _M.run()
     local country = get_country(ip)
 
     if not country then
-        -- fail-open
+        -- fail-open: không có data → cho qua
         cache:set(ip, "ALLOW", CACHE_TTL_FAIL)
-
-        ngx.log(ngx.WARN,
-            "[GEO] Fail-open IP=", ip)
-
+        ngx.log(ngx.WARN, "[GEO] Fail-open IP=", ip)
         return nil
     end
 
@@ -120,11 +124,8 @@ function _M.run()
 
     if ALLOWED_COUNTRIES[country] then
         cache:set(ip, "ALLOW", CACHE_TTL)
-
         ngx.log(ngx.INFO,
-            "[GEO] Allowed IP=", ip,
-            " country=", country)
-
+            "[GEO] Allowed IP=", ip, " country=", country)
         return nil
     end
 
