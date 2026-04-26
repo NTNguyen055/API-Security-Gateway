@@ -14,9 +14,7 @@ environment {
     DOCKERHUB_CREDS = credentials('dockerhub-creds')
     EC2_SSH_CREDS   = 'app-server-ssh'
 
-    // FIX: chuyển IP sang Jenkins credential thay vì hardcode public trên GitHub.
-    // Vào Jenkins → Manage Credentials → thêm "Secret text" với id: ec2-app-ip
-    EC2_APP_IP = credentials('ec2-app-ip')
+    EC2_APP_IP = credentials('13.159.56.185')
     EC2_USER   = 'ubuntu'
 }
 
