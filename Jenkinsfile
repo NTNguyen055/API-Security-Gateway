@@ -67,12 +67,12 @@ pipeline {
 
                 echo "=== RUN DJANGO CHECK + TEST ==="
 
-                # Sử dụng SECRET_KEY tạm thời dài 64 ký tự và tắt DEBUG để vượt qua check --deploy
                 docker run --rm \
                     --entrypoint "" \
                     -e DEBUG=False \
-                    -e SECRET_KEY="k^8#mP2$vL9*zQ5!wX7@nJ4&cR1(fT0)yB3~hG6_dM9+xZ8=K2q%V5-bN4!sC7jW" \
-                    -e JWT_SECRET_KEY="tF5&jY8*pW2!qL9@vM4^cZ7$xR1(bN0)yH3~kG6_dS9+mX8=C2#nV5-fP4!sT7hK" \
+                    -e ALLOWED_HOSTS="*" \
+                    -e SECRET_KEY="super_long_dummy_secret_key_for_jenkins_testing_purposes_only_123456789" \
+                    -e JWT_SECRET_KEY="super_long_dummy_jwt_key_for_jenkins_testing_purposes_only_987654321" \
                     -e DB_ENGINE=django.db.backends.sqlite3 \
                     -e DB_NAME=/tmp/test.db \
                     $APP_IMAGE:$IMAGE_TAG \
