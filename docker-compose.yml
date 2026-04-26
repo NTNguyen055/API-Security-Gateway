@@ -1,7 +1,12 @@
 version: "3.9"
 
+# ======================================================
+# API Security Gateway – docker-compose.yml (optimized)
+# ======================================================
+
 services:
 
+  # ==================== DJANGO APP ====================
   app:
     image: ntnguyen055/api-security-app:latest
     container_name: docapp_django
@@ -23,29 +28,46 @@ services:
       redis:
         condition: service_healthy
 
+    # ✅ THÊM: hardening cho app container
+    security_opt:
+      - no-new-privileges:true
+
+    # ✅ THÊM: giới hạn tài nguyên
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 256M
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s          # ✅ FIX: tăng từ 3s → 5s (Django cold start)
       retries: 5
-      start_period: 20s
+      start_period: 30s    # ✅ FIX: tăng từ 20s → 30s (migrate có thể chậm)
 
 
+  # ==================== REDIS ====================
   redis:
     image: redis:7-alpine
     container_name: docapp_redis
     restart: unless-stopped
 
+    # ✅ NOTE: password đã đúng nhưng nên đưa vào .env thay vì hardcode
     command: >
       redis-server
       --maxmemory 100mb
       --maxmemory-policy allkeys-lru
       --appendonly yes
       --appendfsync everysec
-      --requirepass Banhmi1234o   
+      --requirepass ${REDIS_PASSWORD}
+      --bind 0.0.0.0
+      --protected-mode yes
 
     volumes:
-      - redis_data:/data  
+      - redis_data:/data
 
     environment:
       - TZ=Asia/Ho_Chi_Minh
@@ -53,13 +75,19 @@ services:
     networks:
       - backend
 
+    # ✅ THÊM: hardening – Redis không cần expose ra ngoài
+    security_opt:
+      - no-new-privileges:true
+
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=Banhmi1234o redis-cli ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
       interval: 10s
       timeout: 3s
       retries: 3
+      start_period: 5s    # ✅ THÊM
 
 
+  # ==================== OPENRESTY GATEWAY ====================
   gateway:
     image: ntnguyen055/api-security-gateway:latest
     container_name: openresty_gateway
@@ -68,7 +96,7 @@ services:
     ports:
       - "0.0.0.0:80:80"
       - "0.0.0.0:443:443"
-      - "127.0.0.1:9145:9145"
+      - "127.0.0.1:9145:9145"   # metrics chỉ bind localhost
 
     env_file:
       - /home/ubuntu/appointment-web/.env
@@ -94,7 +122,6 @@ services:
         soft: 65535
         hard: 65535
 
-    # 🔥 HARDEN CONTAINER
     security_opt:
       - no-new-privileges:true
 
@@ -102,6 +129,9 @@ services:
 
     tmpfs:
       - /tmp
+      - /usr/local/openresty/nginx/client_body_temp  # ✅ THÊM: nginx cần ghi temp
+      - /usr/local/openresty/nginx/proxy_temp
+      - /usr/local/openresty/nginx/logs
 
     healthcheck:
       test: ["CMD", "curl", "-sf",
@@ -112,7 +142,6 @@ services:
       retries: 3
       start_period: 15s
 
-    # 🔥 RESOURCE LIMIT
     deploy:
       resources:
         limits:
@@ -121,9 +150,16 @@ services:
         reservations:
           memory: 256M
 
+
+# ==================== NETWORK ====================
 networks:
   backend:
     driver: bridge
+    ipam:                          # ✅ THÊM: subnet tường minh
+      config:
+        - subnet: 172.20.0.0/24
 
+# ==================== VOLUMES ====================
 volumes:
   redis_data:
+    driver: local

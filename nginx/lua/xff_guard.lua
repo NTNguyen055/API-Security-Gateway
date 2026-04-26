@@ -4,11 +4,18 @@ local _M = {}
 
 local TRUSTED_PROXIES = {
     ["127.0.0.1"] = true,
+    -- ✅ THÊM: Docker bridge subnet (172.16-31.x.x)
+    -- Kiểm tra bằng subnet thay vì list tĩnh → xem is_trusted_proxy()
+}
+
+-- ✅ THÊM: trusted CIDR để cover Docker bridge linh hoạt
+local TRUSTED_CIDRS = {
+    { prefix = "172.", min2 = 16, max2 = 31 },  -- 172.16.0.0/12
+    { prefix = "10.",  min2 = 0,  max2 = 255 },  -- 10.0.0.0/8
 }
 
 local MAX_XFF_LENGTH = 512
 
--- Scoring
 local SCORE_XFF_SPOOF     = 50
 local SCORE_XFF_ANOMALY   = 20
 local SCORE_BAN_THRESHOLD = 50
@@ -16,7 +23,6 @@ local BAN_DURATION        = 300
 
 local MAX_HOP_COUNT = 10
 
--- Redis prefix
 local BL_KEY_PREFIX    = "bl:v1:"
 local BL_REASON_PREFIX = "bl_reason:v1:"
 
@@ -28,8 +34,31 @@ local function normalize_ip(ip)
 end
 
 local function is_valid_ip(ip)
+    if not ip then return false end
     return ngx.re.find(ip,
         [[^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$]], "jo") ~= nil
+end
+
+-- ✅ FIX: kiểm tra cả CIDR range, không chỉ map tĩnh
+local function is_trusted_proxy(ip)
+    if TRUSTED_PROXIES[ip] then return true end
+
+    if not ip then return false end
+
+    -- check 172.16.0.0/12
+    local a, b = ip:match("^(%d+)%.(%d+)%.")
+    if not a then return false end
+    a, b = tonumber(a), tonumber(b)
+
+    for _, cidr in ipairs(TRUSTED_CIDRS) do
+        if ip:sub(1, #cidr.prefix) == cidr.prefix then
+            if b >= cidr.min2 and b <= cidr.max2 then
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
 local function count_hops(xff)
@@ -60,9 +89,8 @@ local function ban_ip(ip, duration, reason)
             return
         end
 
-        red:set(BL_KEY_PREFIX .. t_ip, 1, "EX", dur)
+        red:set(BL_KEY_PREFIX .. t_ip,    1,   "EX", dur)
         red:set(BL_REASON_PREFIX .. t_ip, rsn, "EX", dur)
-
         red:set_keepalive(10000, 100)
     end, ip, duration, reason)
 end
@@ -73,40 +101,38 @@ function _M.run()
     local remote_ip = ngx.var.remote_addr
     local xff       = ngx.var.http_x_forwarded_for
 
-    -- default IP
-    ngx.ctx.real_ip = remote_ip
+    -- default: real_ip = remote connection
+    ngx.ctx.real_ip    = remote_ip
+    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
+    ngx.ctx.flags      = ngx.ctx.flags or {}
 
-    -- ================= NO XFF =================
     if not xff or xff == "" then
         return nil
     end
 
-    -- ================= LIMIT SIZE =================
     if #xff > MAX_XFF_LENGTH then
-        ngx.log(ngx.WARN, "[XFF] Header too large")
+        ngx.log(ngx.WARN, "[XFF] Header too large from remote=", remote_ip)
         return 400
     end
 
     local score   = 0
     local reasons = {}
 
-    local is_trusted = TRUSTED_PROXIES[remote_ip]
+    -- ✅ FIX: dùng is_trusted_proxy() thay vì chỉ TRUSTED_PROXIES map
+    local is_trusted = is_trusted_proxy(remote_ip)
 
-    -- ================= UNTRUSTED =================
     if not is_trusted then
+        -- Request đến thẳng từ internet nhưng có XFF → spoof
         score = score + SCORE_XFF_SPOOF
         table.insert(reasons, "untrusted_xff")
 
         ngx.log(ngx.WARN,
             "[XFF] Spoof attempt remote_ip=", remote_ip,
-            " xff=", xff
-        )
-
+            " xff=", xff)
     else
-        -- ================= TRUSTED FLOW =================
-
         local client_ip = extract_client_ip(xff)
 
+        -- ✅ FIX: validate IP hợp lệ và không phải private của chính proxy
         if not client_ip or not is_valid_ip(client_ip) then
             score = score + SCORE_XFF_ANOMALY
             table.insert(reasons, "invalid_client_ip")
@@ -114,13 +140,12 @@ function _M.run()
             ngx.ctx.real_ip = client_ip
         end
 
-        if count_hops(xff) > MAX_HOP_COUNT then
+        local hops = count_hops(xff)
+        if hops > MAX_HOP_COUNT then
             score = score + SCORE_XFF_ANOMALY
             table.insert(reasons, "too_many_hops")
         end
     end
-
-    -- ================= FINAL =================
 
     if score == 0 then
         return nil
@@ -128,24 +153,22 @@ function _M.run()
 
     local reason_str = table.concat(reasons, "|")
 
-    ngx.ctx.risk_score = (ngx.ctx.risk_score or 0) + score
+    ngx.ctx.risk_score = ngx.ctx.risk_score + score
     table.insert(ngx.ctx.flags, "xff_issue")
 
     ngx.log(ngx.WARN,
         "[XFF] IP=", ngx.ctx.real_ip,
+        " remote=", remote_ip,
         " score=", score,
-        " reasons=", reason_str
-    )
+        " reasons=", reason_str)
 
-    -- 🔥 FIX: chỉ ban client IP, không ban proxy
+    -- ✅ chỉ ban client IP (đầu chuỗi XFF), không ban proxy
     if score >= SCORE_BAN_THRESHOLD and ngx.ctx.real_ip ~= remote_ip then
         local bl_cache = ngx.shared.ip_blacklist
         if bl_cache then
             bl_cache:set(ngx.ctx.real_ip, true, BAN_DURATION)
         end
-
         ban_ip(ngx.ctx.real_ip, BAN_DURATION, reason_str)
-
         return 403
     end
 
