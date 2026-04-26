@@ -28,6 +28,15 @@ pipeline {
             }
         }
 
+        stage('Clean Docker') {
+            steps {
+                sh '''
+                docker system prune -af || true
+                docker builder prune -af || true
+                '''
+            }
+        }
+
         stage('Build Images') {
             steps {
                 sh '''
