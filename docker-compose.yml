@@ -42,10 +42,10 @@ services:
       --maxmemory-policy allkeys-lru
       --appendonly yes
       --appendfsync everysec
-      --requirepass strongpassword123   # 🔥 FIX
+      --requirepass Banhmi1234o   
 
     volumes:
-      - redis_data:/data   # 🔥 FIX (QUAN TRỌNG)
+      - redis_data:/data  
 
     environment:
       - TZ=Asia/Ho_Chi_Minh
@@ -54,7 +54,7 @@ services:
       - backend
 
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "strongpassword123", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=Banhmi1234o redis-cli ping | grep PONG"]
       interval: 10s
       timeout: 3s
       retries: 3
