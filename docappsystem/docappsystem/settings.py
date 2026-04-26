@@ -19,10 +19,7 @@ DEBUG = os.environ.get("DEBUG", "False").lower() in ["true", "1", "yes"]
 
 # ================= ALLOWED HOSTS =================
 allowed_hosts_str = os.environ.get("ALLOWED_HOSTS", "")
-
-ALLOWED_HOSTS = [
-    h.strip() for h in allowed_hosts_str.split(",") if h.strip()
-]
+ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_str.split(",") if h.strip()]
 
 if not ALLOWED_HOSTS:
     if DEBUG:
@@ -32,12 +29,11 @@ if not ALLOWED_HOSTS:
 
 # ================= CSRF =================
 csrf_origins = os.environ.get("CSRF_TRUSTED_ORIGINS", "")
-CSRF_TRUSTED_ORIGINS = [
-    o.strip() for o in csrf_origins.split(",") if o.strip()
-]
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in csrf_origins.split(",") if o.strip()]
 
 # ================= PROXY (OpenResty) =================
 USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # ================= SECURITY HARDENING =================
@@ -57,6 +53,11 @@ X_FRAME_OPTIONS = "DENY"
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
+
+# ✅ EXTRA SECURITY (NEW)
+SECURE_REFERRER_POLICY = "no-referrer"
+CSRF_USE_SESSIONS = True
+DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024  # 2MB
 
 # ================= APPLICATION =================
 INSTALLED_APPS = [
@@ -100,9 +101,6 @@ TEMPLATES = [
 WSGI_APPLICATION = "docappsystem.wsgi.application"
 
 # ================= DATABASE =================
-# FIX: đọc ENGINE từ env thay vì hardcode mysql.
-# Cho phép Jenkinsfile truyền DB_ENGINE=django.db.backends.sqlite3
-# khi chạy test mà không cần DB thật.
 DATABASES = {
     "default": {
         "ENGINE": os.environ.get("DB_ENGINE", "django.db.backends.mysql"),
@@ -111,9 +109,9 @@ DATABASES = {
         "PASSWORD": os.environ.get("DB_PASSWORD"),
         "HOST": os.environ.get("DB_HOST"),
         "PORT": os.environ.get("DB_PORT", "3306"),
-        "CONN_MAX_AGE": 60,
+        "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", 60)),
         "OPTIONS": {
-            "connect_timeout": 5,
+            "connect_timeout": int(os.environ.get("DB_CONNECT_TIMEOUT", 5)),
         },
     }
 }
@@ -138,7 +136,6 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# FIX: guard tránh warning khi thư mục static/ chưa tồn tại trong container
 _static_dir = BASE_DIR / "static"
 STATICFILES_DIRS = [_static_dir] if _static_dir.exists() else []
 
@@ -158,6 +155,10 @@ CACHES = {
         },
     }
 }
+
+# ================= SESSION (NEW) =================
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+SESSION_CACHE_ALIAS = "default"
 
 # ================= S3 STORAGE =================
 USE_S3 = os.environ.get("USE_S3", "False") == "True"
@@ -186,6 +187,29 @@ if USE_S3:
 
     STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
     MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/media/"
+
+# ================= LOGGING (NEW) =================
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+}
 
 # ================= DEFAULT PK =================
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

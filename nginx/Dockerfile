@@ -14,47 +14,31 @@ ENV LUA_LIB_DIR=/usr/local/openresty/lualib \
 
 RUN mkdir -p $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
 
-# Chỉ install những gì thực sự cần
-RUN opm get knyar/nginx-lua-prometheus
+# Install libs FIRST
+RUN opm get knyar/nginx-lua-prometheus \
+ && opm get jkeys89/lua-resty-hmac
 
+# Copy custom code
 COPY lualib/ $LUA_LIB_DIR/
 COPY lua/    $LUA_APP_DIR/
 COPY geoip/  $GEOIP_DIR/
 COPY nginx.conf $NGINX_DIR/conf/nginx.conf
 
-RUN find $LUA_LIB_DIR -name "*.md" -delete
+# Verify
+RUN test -f /etc/geoip/GeoLite2-Country.mmdb
 
-# Verify build-time
-RUN /usr/local/openresty/bin/resty -e "require 'cjson'; print('cjson OK')" \
- && /usr/local/openresty/bin/resty -e "require 'resty.redis'; print('redis OK')" \
- && /usr/local/openresty/bin/resty -e "require 'resty.jwt'; print('jwt OK')" \
- && /usr/local/openresty/bin/resty -e "require 'resty.limit.req'; print('limit OK')" \
- && /usr/local/openresty/bin/resty -e "require 'resty.maxminddb'; print('maxmind OK')" \
- && /usr/local/openresty/bin/resty -e "require 'prometheus'; print('prometheus OK')"
+RUN /usr/local/openresty/bin/resty -e "require 'resty.redis'"
+RUN /usr/local/openresty/bin/resty -e "require 'resty.jwt'"
+RUN /usr/local/openresty/bin/resty -e "require 'resty.limit.req'"
+RUN /usr/local/openresty/bin/resty -e "require 'resty.maxminddb'"
 
 RUN addgroup -S nginxgrp && adduser -S nginxusr -G nginxgrp
 
 RUN mkdir -p \
         $NGINX_DIR/client_body_temp \
         $NGINX_DIR/proxy_temp \
-        $NGINX_DIR/fastcgi_temp \
-        $NGINX_DIR/uwsgi_temp \
-        $NGINX_DIR/scgi_temp \
         $NGINX_DIR/logs \
-    && chown -R nginxusr:nginxgrp \
-        $NGINX_DIR/client_body_temp \
-        $NGINX_DIR/proxy_temp \
-        $NGINX_DIR/fastcgi_temp \
-        $NGINX_DIR/uwsgi_temp \
-        $NGINX_DIR/scgi_temp \
-        $NGINX_DIR/logs \
-        $LUA_LIB_DIR \
-        $LUA_APP_DIR \
-        $GEOIP_DIR \
-    && chmod -R 755 \
-        $LUA_LIB_DIR \
-        $LUA_APP_DIR \
-        $GEOIP_DIR
+    && chown -R nginxusr:nginxgrp $NGINX_DIR $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
 
 USER nginxusr
 

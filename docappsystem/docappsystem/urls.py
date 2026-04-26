@@ -2,117 +2,101 @@ from django.contrib import admin
 from django.urls import path
 from django.conf import settings
 from django.conf.urls.static import static
-from django.http import HttpResponse
+from django.http import JsonResponse
 
 from . import views, adminviews, docviews, userviews
 
-import logging
-
-logger = logging.getLogger(__name__)
-
-
 # =========================
-# Health Check
+# HEALTH CHECK (PRODUCTION READY)
 # =========================
-# FIX: trả về body "OK" để dễ debug hơn khi inspect log.
-# csrf_exempt bỏ — GET request không cần exempt CSRF.
 def health_check(request):
-    return HttpResponse("OK", status=200)
+    return JsonResponse({"status": "ok"}, status=200)
 
 
 # =========================
-# URL Patterns
+# URL PATTERNS
 # =========================
 urlpatterns = [
 
-    # -------------------------
-    # Admin
-    # -------------------------
+    # =========================
+    # CORE
+    # =========================
+    path('health/', health_check, name='health'),
+
+    # =========================
+    # ADMIN
+    # =========================
     path('admin/', admin.site.urls),
 
-    path('base/', views.BASE, name='base'),
+    path('admin/home/', adminviews.ADMINHOME, name='admin_home'),
+    path('admin/specialization/', adminviews.SPECIALIZATION),
+    path('admin/specialization/manage/', adminviews.MANAGESPECIALIZATION),
+    path('admin/specialization/delete/<str:id>/', adminviews.DELETE_SPECIALIZATION),
+    path('admin/specialization/update/<str:id>/', adminviews.UPDATE_SPECIALIZATION),
+    path('admin/specialization/update/details/', adminviews.UPDATE_SPECIALIZATION_DETAILS),
 
-    # -------------------------
-    # Authentication
-    # -------------------------
-    path('login', views.LOGIN, name='login'),
-    path('doLogin', views.doLogin, name='doLogin'),
-    path('doLogout', views.doLogout, name='logout'),
+    path('admin/doctor/', adminviews.DoctorList),
+    path('admin/doctor/<str:id>/', adminviews.ViewDoctorDetails),
+    path('admin/doctor/<str:id>/appointments/', adminviews.ViewDoctorAppointmentList),
+    path('admin/patient/<str:id>/', adminviews.ViewPatientDetails),
 
-    # -------------------------
-    # Health
-    # -------------------------
-    path('health/', health_check),
+    path('admin/search/doctor/', adminviews.Search_Doctor),
+    path('admin/report/doctor/', adminviews.Doctor_Between_Date_Report),
 
-    # =========================
-    # ADMIN PANEL
-    # =========================
-    path('Admin/AdminHome', adminviews.ADMINHOME, name='admin_home'),
-
-    path('Admin/Specialization', adminviews.SPECIALIZATION, name='add_specilizations'),
-    path('Admin/ManageSpecialization', adminviews.MANAGESPECIALIZATION, name='manage_specilizations'),
-    path('Admin/DeleteSpecialization/<str:id>', adminviews.DELETE_SPECIALIZATION, name='delete_specilizations'),
-    path('UpdateSpecialization/<str:id>', adminviews.UPDATE_SPECIALIZATION, name='update_specilizations'),
-    path('UPDATE_Specialization_DETAILS', adminviews.UPDATE_SPECIALIZATION_DETAILS, name='update_specilizations_details'),
-
-    path('Admin/DoctorList', adminviews.DoctorList, name='viewdoctorlist'),
-    path('Admin/ViewDoctorDetails/<str:id>', adminviews.ViewDoctorDetails, name='viewdoctordetails'),
-    path('Admin/ViewDoctorAppointmentList/<str:id>', adminviews.ViewDoctorAppointmentList, name='viewdoctorappointmentlist'),
-    path('Admin/ViewPatientDetails/<str:id>', adminviews.ViewPatientDetails, name='viewpatientdetails'),
-
-    path('SearchDoctor', adminviews.Search_Doctor, name='search_doctor'),
-    path('DoctorBetweenDateReport', adminviews.Doctor_Between_Date_Report, name='doctor_between_date_report'),
-
-    # Website config
-    path('Website/update', adminviews.WEBSITE_UPDATE, name='website_update'),
-    path('UPDATE_WEBSITE_DETAILS', adminviews.UPDATE_WEBSITE_DETAILS, name='update_website_details'),
+    path('admin/website/update/', adminviews.WEBSITE_UPDATE),
+    path('admin/website/update/details/', adminviews.UPDATE_WEBSITE_DETAILS),
 
     # =========================
-    # DOCTOR PANEL
+    # AUTH
     # =========================
-    path('docsignup/', docviews.DOCSIGNUP, name='docsignup'),
-    path('Doctor/DocHome', docviews.DOCTORHOME, name='doctor_home'),
-
-    path('Doctor/ViewAppointment', docviews.View_Appointment, name='view_appointment'),
-    path('DoctorPatientAppointmentDetails/<str:id>', docviews.Patient_Appointment_Details, name='patientappointmentdetails'),
-    path('AppointmentDetailsRemark/Update', docviews.Patient_Appointment_Details_Remark, name='patient_appointment_details_remark'),
-
-    path('DoctorPatientApprovedAppointment', docviews.Patient_Approved_Appointment, name='patientapprovedappointment'),
-    path('DoctorPatientCancelledAppointment', docviews.Patient_Cancelled_Appointment, name='patientcancelledappointment'),
-    path('DoctorPatientNewAppointment', docviews.Patient_New_Appointment, name='patientnewappointment'),
-    path('DoctorPatientListApprovedAppointment', docviews.Patient_List_Approved_Appointment, name='patientlistappointment'),
-    path('DoctorAppointmentList/<str:id>', docviews.DoctorAppointmentList, name='doctorappointmentlist'),
-
-    path('PatientAppointmentPrescription', docviews.Patient_Appointment_Prescription, name='patientappointmentprescription'),
-    path('PatientAppointmentCompleted', docviews.Patient_Appointment_Completed, name='patientappointmentcompleted'),
-
-    path('SearchAppointment', docviews.Search_Appointments, name='search_appointment'),
-    path('BetweenDateReport', docviews.Between_Date_Report, name='between_date_report'),
+    path('auth/login/', views.LOGIN),
+    path('auth/do-login/', views.doLogin),
+    path('auth/logout/', views.doLogout),
 
     # =========================
-    # USER PANEL
+    # DOCTOR
     # =========================
-    path('', userviews.Index, name='index'),
+    path('doctor/signup/', docviews.DOCSIGNUP),
+    path('doctor/home/', docviews.DOCTORHOME),
 
-    path('userbase/', userviews.USERBASE, name='userbase'),
-    path('userappointment/', userviews.create_appointment, name='appointment'),
-    path('User_SearchAppointment', userviews.User_Search_Appointments, name='user_search_appointment'),
-    path('ViewAppointmentDetails/<str:id>/', userviews.View_Appointment_Details, name='viewappointmentdetails'),
+    path('doctor/appointments/', docviews.View_Appointment),
+    path('doctor/appointments/<str:id>/', docviews.Patient_Appointment_Details),
+    path('doctor/appointments/update/', docviews.Patient_Appointment_Details_Remark),
+
+    path('doctor/appointments/approved/', docviews.Patient_Approved_Appointment),
+    path('doctor/appointments/cancelled/', docviews.Patient_Cancelled_Appointment),
+    path('doctor/appointments/new/', docviews.Patient_New_Appointment),
+    path('doctor/appointments/list/', docviews.Patient_List_Approved_Appointment),
+
+    path('doctor/appointments/<str:id>/list/', docviews.DoctorAppointmentList),
+
+    path('doctor/prescription/', docviews.Patient_Appointment_Prescription),
+    path('doctor/completed/', docviews.Patient_Appointment_Completed),
+
+    path('doctor/search/', docviews.Search_Appointments),
+    path('doctor/report/', docviews.Between_Date_Report),
+
+    # =========================
+    # USER
+    # =========================
+    path('', userviews.Index),
+
+    path('user/base/', userviews.USERBASE),
+    path('user/appointment/', userviews.create_appointment),
+    path('user/search/', userviews.User_Search_Appointments),
+    path('user/appointment/<str:id>/', userviews.View_Appointment_Details),
 
     # =========================
     # PROFILE
     # =========================
-    path('Profile', views.PROFILE, name='profile'),
-    path('Profile/update', views.PROFILE_UPDATE, name='profile_update'),
-    path('Password', views.CHANGE_PASSWORD, name='change_password'),
+    path('user/profile/', views.PROFILE),
+    path('user/profile/update/', views.PROFILE_UPDATE),
+    path('user/password/', views.CHANGE_PASSWORD),
 
 ]
 
 # =========================
-# Media (Dev only, non-S3)
+# MEDIA (DEV ONLY)
 # =========================
-# FIX: guard rõ ràng — chỉ serve media local khi DEBUG và không dùng S3.
-# static() đã trả về [] khi DEBUG=False, nhưng guard này tự document
-# rõ ý định hơn và tránh nhầm lẫn khi đọc code.
 if settings.DEBUG and not getattr(settings, "USE_S3", False):
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

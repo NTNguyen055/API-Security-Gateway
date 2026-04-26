@@ -15,20 +15,31 @@ local REDIS_PORT = 6379
 
 local REDIS_DOWN_TTL = 5
 
-local CACHE_PREFIX   = "jwt:v1:"
+local CACHE_PREFIX   = "jwt:v2:"
 local REVOKE_PREFIX  = "jwt_bl:v1:"
-local REPLAY_PREFIX  = "jwt_rp:v1:"
+local REPLAY_PREFIX  = "jwt_rp:v2:"
 
 local EXPECTED_ISS = "docapp"
 local EXPECTED_AUD = "docapp-users"
+
+local MAX_TOKEN_SIZE = 2048
 
 -- Risk scoring
 local SCORE_MISSING = 20
 local SCORE_INVALID = 40
 local SCORE_REPLAY  = 50
+local SCORE_BRUTE   = 15
 
--- log rate limit
-local LOG_TTL = 10
+-- ================= SKIP =================
+
+local function is_public_path(uri)
+    if not uri then return false end
+
+    return uri:find("^/health")
+        or uri:find("^/login")
+        or uri:find("^/static")
+        or uri:find("^/media")
+end
 
 -- ================= UTIL =================
 
@@ -36,16 +47,6 @@ local function hash_token(token)
     local sha = sha256:new()
     sha:update(token)
     return str.to_hex(sha:final())
-end
-
-local function log_once(key, msg)
-    local dict = ngx.shared.limit_req_store
-    if not dict then return end
-
-    local ok = dict:add(key, true, LOG_TTL)
-    if ok then
-        ngx.log(ngx.WARN, msg)
-    end
 end
 
 local function get_redis()
@@ -73,14 +74,15 @@ function _M.run()
         return nil
     end
 
-    if not ngx.re.find(ngx.var.uri, "^/api/", "jo") then
-        return nil
-    end
-
-    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
+    local uri = ngx.var.uri
+    local ip  = ngx.ctx.real_ip or ngx.var.remote_addr
 
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
+
+    if is_public_path(uri) then
+        return nil
+    end
 
     -- ================= AUTH HEADER =================
     local auth_header = ngx.var.http_authorization
@@ -91,7 +93,7 @@ function _M.run()
     end
 
     local m = ngx.re.match(auth_header,
-        [[^Bearer\s+([A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+)$]], "jo")
+        [[^Bearer\s+(.+)$]], "jo")
 
     if not m then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
@@ -100,6 +102,14 @@ function _M.run()
     end
 
     local token = m[1]
+
+    -- 🔥 limit size
+    if #token > MAX_TOKEN_SIZE then
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
+        table.insert(ngx.ctx.flags, "jwt_oversize")
+        return nil
+    end
+
     local token_hash = hash_token(token)
 
     -- ================= CACHE =================
@@ -110,8 +120,10 @@ function _M.run()
 
     -- ================= REDIS =================
     local red, err = get_redis()
+
     if not red then
-        log_once("redis_down", "[JWT] Redis unavailable: " .. (err or ""))
+        ngx.ctx.risk_score = ngx.ctx.risk_score + 5
+        table.insert(ngx.ctx.flags, "redis_down")
     end
 
     -- ================= REVOKE =================
@@ -120,30 +132,38 @@ function _M.run()
         if revoked and revoked ~= ngx.null then
             ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
             table.insert(ngx.ctx.flags, "jwt_revoked")
-
-            log_once("jwt_rev:" .. ip, "[JWT] Revoked token IP=" .. ip)
-
             red:set_keepalive(10000, 100)
             return nil
         end
     end
 
     -- ================= VERIFY =================
-    local jwt_obj = jwt:verify(JWT_SECRET, token, {
-        alg = "HS256"
-    })
+    local jwt_obj = jwt:load_jwt(token)
+
+    if not jwt_obj.valid then
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
+        table.insert(ngx.ctx.flags, "jwt_invalid")
+        return nil
+    end
+
+    -- 🔥 strict alg check
+    if jwt_obj.header.alg ~= "HS256" then
+        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
+        table.insert(ngx.ctx.flags, "jwt_alg_invalid")
+        return nil
+    end
+
+    jwt_obj = jwt:verify(JWT_SECRET, token, { alg = "HS256" })
 
     if not jwt_obj.verified then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
         table.insert(ngx.ctx.flags, "jwt_invalid")
-
-        log_once("jwt_inv:" .. ip, "[JWT] Invalid token IP=" .. ip)
         return nil
     end
 
     local payload = jwt_obj.payload
 
-    -- ================= CLAIM VALIDATION =================
+    -- ================= CLAIM =================
     if payload.iss ~= EXPECTED_ISS or payload.aud ~= EXPECTED_AUD then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_INVALID
         table.insert(ngx.ctx.flags, "jwt_claims_invalid")
@@ -171,27 +191,20 @@ function _M.run()
     end
 
     -- ================= REPLAY =================
-    -- FIX: red:set(..., "NX") trả về:
-    --   "OK"       → key chưa tồn tại, set thành công  → request hợp lệ
-    --   ngx.null   → key đã tồn tại (NX condition fail) → đây là REPLAY
     if red and payload.jti then
         local ttl = payload.exp - now
-        if ttl > 0 then
-            local res, set_err = red:set(REPLAY_PREFIX .. payload.jti, 1, "NX", "EX", ttl)
 
-            if set_err then
-                ngx.log(ngx.ERR, "[JWT] Redis SET NX error: ", set_err)
-            elseif res == ngx.null then
-                -- Key đã tồn tại → jti này đã được dùng → REPLAY
+        if ttl > 0 then
+            local key = REPLAY_PREFIX .. payload.jti .. ":" .. ip
+
+            local res = red:set(key, 1, "NX", "EX", ttl)
+
+            if res == ngx.null then
                 ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_REPLAY
                 table.insert(ngx.ctx.flags, "jwt_replay")
-
-                log_once("jwt_rp:" .. ip, "[JWT] Replay detected IP=" .. ip)
-
                 red:set_keepalive(10000, 100)
                 return nil
             end
-            -- res == "OK" → jti mới, request hợp lệ, tiếp tục
         end
     end
 

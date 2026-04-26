@@ -1,55 +1,32 @@
 local _M = {}
 
--- ================= DEPENDENCIES =================
-local resty_md5 = require "resty.md5"
-local resty_str = require "resty.string"
-
 -- ================= CONFIG =================
 
 local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
 local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
 
--- Risk scoring
 local SCORE_REDIS_SOFT = 10
 local SCORE_REDIS_HARD = 25
 
 local REDIS_DOWN_TTL = 5
 
--- ================= HELPERS =================
+local MAX_KEYS_PER_IP = 100
 
--- FIX: hash UA để tránh Redis key quá dài → OOM
-local function hash_ua(ua)
-    if not ua or ua == "" then return "empty" end
+-- ================= SKIP =================
 
-    local m = resty_md5:new()
-    if not m then return "x" end
+local function is_safe_path(uri)
+    if not uri then return false end
 
-    m:update(ua)
-    local digest = m:final()
-    if not digest then return "x" end
-
-    return resty_str.to_hex(digest):sub(1, 8)
+    return uri:find("^/health")
+        or uri:find("^/static")
+        or uri:find("^/media")
 end
 
--- ================= REDIS SCRIPT =================
-
-local REDIS_SCRIPT = [[
-local key = KEYS[1]
-local limit = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-
-local current = redis.call('INCR', key)
-if current == 1 then
-    redis.call('EXPIRE', key, window)
-end
-
-return current
-]]
-
--- ================= REDIS CONNECT =================
+-- ================= REDIS =================
 
 local function get_redis()
     local cb = ngx.shared.redis_down
+
     if cb and cb:get("down") then
         return nil, "circuit_open"
     end
@@ -67,70 +44,111 @@ local function get_redis()
     return red, nil
 end
 
+-- ================= LUA SCRIPT =================
+-- sliding window (approx bằng 2 bucket)
+
+local REDIS_SCRIPT = [[
+local key = KEYS[1]
+local key_prev = KEYS[2]
+
+local limit = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+
+local current = redis.call("GET", key)
+if not current then current = 0 else current = tonumber(current) end
+
+local prev = redis.call("GET", key_prev)
+if not prev then prev = 0 else prev = tonumber(prev) end
+
+local weight = (window - (now % window)) / window
+local total = current + (prev * weight)
+
+if total >= limit then
+    return {0, total}
+end
+
+current = redis.call("INCR", key)
+if current == 1 then
+    redis.call("EXPIRE", key, window)
+end
+
+return {1, total}
+]]
+
 -- ================= CORE =================
 
 function _M.run()
-    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
+    local ip  = ngx.ctx.real_ip or ngx.var.remote_addr
+    local uri = ngx.var.uri
 
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
 
-    if ngx.ctx.flags and table.concat(ngx.ctx.flags, ","):find("rate_limit_hard") then
+    if is_safe_path(uri) then
         return nil
     end
 
     local red, err = get_redis()
     if not red then
-        ngx.log(ngx.WARN, "[REDIS_RL] Redis unavailable: ", err, " → skip")
+        ngx.log(ngx.WARN, "[REDIS_RL] Redis down → fallback")
+
+        -- 🔥 fallback: tăng risk nhẹ thay vì bỏ qua
+        ngx.ctx.risk_score = ngx.ctx.risk_score + 5
+        table.insert(ngx.ctx.flags, "redis_down")
+
         return nil
     end
 
-    -- FIX: hash UA trước khi ghép vào key → tránh Redis key dài → OOM
-    local ua = ngx.var.http_user_agent or ""
-    local window_id = math.floor(ngx.time() / REDIS_RL_WINDOW)
-    local key = "rrl:" .. ip .. ":" .. hash_ua(ua) .. ":" .. window_id
+    local now = ngx.time()
+    local window = REDIS_RL_WINDOW
 
-    local count, script_err = red:eval(
-        REDIS_SCRIPT, 1,
-        key,
+    local curr_bucket = math.floor(now / window)
+    local prev_bucket = curr_bucket - 1
+
+    local key      = "rrl:" .. ip .. ":" .. curr_bucket
+    local key_prev = "rrl:" .. ip .. ":" .. prev_bucket
+
+    local res, script_err = red:eval(
+        REDIS_SCRIPT, 2,
+        key, key_prev,
         REDIS_RATE_LIMIT,
-        REDIS_RL_WINDOW
+        window,
+        now
     )
 
     red:set_keepalive(10000, 100)
 
-    if not count then
+    if not res then
         ngx.log(ngx.ERR, "[REDIS_RL] Script error: ", script_err)
         return nil
     end
 
-    ngx.log(ngx.INFO, "[REDIS_RL] IP=", ip,
-            " count=", count, "/", REDIS_RATE_LIMIT)
+    local allowed = res[1]
+    local total   = res[2]
 
-    -- ================= SCORING =================
+    ngx.log(ngx.INFO,
+        "[REDIS_RL] IP=", ip,
+        " total=", total, "/", REDIS_RATE_LIMIT)
 
-    if count > REDIS_RATE_LIMIT then
+    -- ================= DECISION =================
+
+    if allowed == 0 then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_REDIS_HARD
         table.insert(ngx.ctx.flags, "redis_rate_hard")
 
-        ngx.log(ngx.WARN, "[REDIS_RL] HARD limit IP=", ip,
-                " count=", count,
-                " score=", ngx.ctx.risk_score)
+        ngx.log(ngx.WARN, "[REDIS_RL] HARD limit IP=", ip)
 
-    elseif count > (REDIS_RATE_LIMIT * 0.7) then
+    elseif total > (REDIS_RATE_LIMIT * 0.7) then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_REDIS_SOFT
         table.insert(ngx.ctx.flags, "redis_rate_soft")
-
-        ngx.log(ngx.INFO, "[REDIS_RL] Near limit IP=", ip,
-                " count=", count,
-                " score=", ngx.ctx.risk_score)
     end
 
     -- ================= HEADERS =================
 
-    ngx.header["X-RateLimit-Limit"]     = REDIS_RATE_LIMIT
+    ngx.header["X-RateLimit-Limit"] = REDIS_RATE_LIMIT
     ngx.header["X-RateLimit-Remaining"] =
-        math.max(0, REDIS_RATE_LIMIT - count)
+        math.max(0, REDIS_RATE_LIMIT - total)
 
     return nil
 end

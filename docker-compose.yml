@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
 
   app:
@@ -10,6 +12,9 @@ services:
 
     env_file:
       - /home/ubuntu/appointment-web/.env
+
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
 
     networks:
       - backend
@@ -25,12 +30,6 @@ services:
       retries: 5
       start_period: 20s
 
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 
   redis:
     image: redis:7-alpine
@@ -43,21 +42,22 @@ services:
       --maxmemory-policy allkeys-lru
       --appendonly yes
       --appendfsync everysec
+      --requirepass strongpassword123   # 🔥 FIX
+
+    volumes:
+      - redis_data:/data   # 🔥 FIX (QUAN TRỌNG)
+
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
 
     networks:
       - backend
 
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "strongpassword123", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
-
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
 
 
   gateway:
@@ -72,6 +72,9 @@ services:
 
     env_file:
       - /home/ubuntu/appointment-web/.env
+
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
 
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
@@ -91,6 +94,15 @@ services:
         soft: 65535
         hard: 65535
 
+    # 🔥 HARDEN CONTAINER
+    security_opt:
+      - no-new-privileges:true
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+
     healthcheck:
       test: ["CMD", "curl", "-sf",
              "-A", "HealthChecker/1.0",
@@ -100,12 +112,18 @@ services:
       retries: 3
       start_period: 15s
 
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    # 🔥 RESOURCE LIMIT
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 256M
 
 networks:
   backend:
     driver: bridge
+
+volumes:
+  redis_data:

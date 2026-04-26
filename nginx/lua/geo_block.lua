@@ -17,6 +17,8 @@ local CACHE_TTL_FAIL  = 300
 local SCORE_GEO_BLOCK   = 50
 local SCORE_GEO_UNKNOWN = 10
 
+local MAX_LOOKUP_PER_REQ = 5
+
 -- ================= INIT =================
 
 local geoip
@@ -27,7 +29,7 @@ local function init_geoip()
 
     local ok, lib = pcall(require, "resty.maxminddb")
     if not ok then
-        ngx.log(ngx.ERR, "[GEO] Cannot load maxminddb: ", lib)
+        ngx.log(ngx.ERR, "[GEO] Cannot load lib: ", lib)
         return false
     end
 
@@ -40,22 +42,24 @@ local function init_geoip()
     end
 
     geoip_ready = true
-    ngx.log(ngx.NOTICE, "[GEO] GeoIP DB loaded")
     return true
 end
 
 -- ================= HELPERS =================
 
+local function normalize_ip(ip)
+    if not ip then return nil end
+    return ip:gsub("%s+", "")
+end
+
 local function is_private_ip(ip)
     if not ip then return true end
 
-    -- IPv4 private
     if ngx.re.find(ip,
         [[^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)]], "jo") then
         return true
     end
 
-    -- IPv6 private / loopback
     if ngx.re.find(ip, [[^(::1|fc00:|fd00:)]], "jo") then
         return true
     end
@@ -63,14 +67,12 @@ local function is_private_ip(ip)
     return false
 end
 
-local function get_country(ip)
-    if not geoip_ready then
-        if not init_geoip() then
-            return nil
-        end
+local function get_country_code(ip)
+    if not init_geoip() then
+        return nil
     end
 
-    local res, err = geoip.lookup(ip, {"country", "iso_code"})
+    local res, err = geoip.lookup(ip)
 
     if err then
         if err ~= "not found" then
@@ -79,13 +81,17 @@ local function get_country(ip)
         return nil
     end
 
-    return res
+    if not res or not res.country or not res.country.iso_code then
+        return nil
+    end
+
+    return res.country.iso_code
 end
 
 -- ================= MAIN =================
 
 function _M.run()
-    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
+    local ip = normalize_ip(ngx.ctx.real_ip or ngx.var.remote_addr)
 
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
@@ -111,21 +117,15 @@ function _M.run()
             ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_GEO_UNKNOWN
             table.insert(ngx.ctx.flags, "geo_unknown")
             return nil
-        else
+        elseif cached == "BLOCK" then
             ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_GEO_BLOCK
             table.insert(ngx.ctx.flags, "geo_block")
-
-            ngx.log(ngx.INFO,
-                "[GEO][CACHE] Block IP=", ip,
-                " country=", cached,
-                " score=", ngx.ctx.risk_score)
-
             return nil
         end
     end
 
     -- ================= LOOKUP =================
-    local country = get_country(ip)
+    local country = get_country_code(ip)
 
     if not country then
         cache:set(ip, "UNKNOWN", CACHE_TTL_FAIL)
@@ -133,7 +133,7 @@ function _M.run()
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_GEO_UNKNOWN
         table.insert(ngx.ctx.flags, "geo_unknown")
 
-        ngx.log(ngx.INFO, "[GEO] Unknown country IP=", ip)
+        ngx.log(ngx.INFO, "[GEO] Unknown IP=", ip)
         return nil
     end
 
@@ -150,7 +150,7 @@ function _M.run()
     end
 
     -- ❌ BLOCKED COUNTRY
-    cache:set(ip, country, CACHE_TTL)
+    cache:set(ip, "BLOCK", CACHE_TTL)
 
     ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_GEO_BLOCK
     table.insert(ngx.ctx.flags, "geo_block")

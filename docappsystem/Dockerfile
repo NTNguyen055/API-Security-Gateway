@@ -35,7 +35,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_ROOT_USER_ACTION=ignore \
     PYTHONUNBUFFERED=1 \
     PYTHONOPTIMIZE=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    DJANGO_SETTINGS_MODULE=docappsystem.settings
 
 # Runtime deps nhẹ
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,23 +44,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy wheels trước (cache tốt hơn)
+# Copy wheels
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir /wheels/* \
  && rm -rf /wheels
 
-# Copy source code sau (tránh invalidate cache pip)
+# Copy source
 COPY . .
 
 # =========================
-# STATIC (fail-safe)
-# =========================
-RUN python manage.py collectstatic --noinput || echo "collectstatic skipped"
-
-# =========================
-# SECURITY (non-root)
+# SECURITY
 # =========================
 RUN useradd -m -u 1001 appuser \
  && chown -R appuser:appuser /app
@@ -74,10 +70,18 @@ EXPOSE 8000
 # =========================
 # HEALTHCHECK
 # =========================
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD \
-  curl -fs http://localhost:8000/health/ || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
+ CMD curl -fs http://localhost:8000/health/ || exit 1
 
 # =========================
-# GUNICORN (PRODUCTION TUNED)
+# GUNICORN (AUTO SCALE)
 # =========================
-CMD ["gunicorn","docappsystem.wsgi:application","--bind","0.0.0.0:8000","--workers","2","--threads","2","--timeout","90","--keep-alive","5","--max-requests","1000","--max-requests-jitter","100","--preload"]
+CMD ["sh", "-c", "gunicorn docappsystem.wsgi:application \
+    --bind 0.0.0.0:8000 \
+    --workers $(nproc) \
+    --threads 2 \
+    --timeout 90 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --preload"]
