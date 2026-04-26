@@ -12,7 +12,19 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 def get_client_ip(request):
-    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR")
+    headers = request.META
+
+    ip = headers.get("HTTP_X_REAL_IP")
+
+    if not ip:
+        x_forwarded_for = headers.get("HTTP_X_FORWARDED_FOR")
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(",")[0].strip()
+
+    if not ip:
+        ip = headers.get("REMOTE_ADDR")
+
+    return ip
 
 # ================= BASE =================
 def BASE(request):
