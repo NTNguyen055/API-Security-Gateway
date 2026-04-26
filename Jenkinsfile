@@ -14,7 +14,7 @@ environment {
     DOCKERHUB_CREDS = credentials('dockerhub-creds')
     EC2_SSH_CREDS   = 'app-server-ssh'
 
-    EC2_APP_IP = credentials('13.159.56.185')
+    EC2_APP_IP = '13.159.56.185'
     EC2_USER   = 'ubuntu'
 }
 
