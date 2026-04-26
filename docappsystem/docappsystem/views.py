@@ -7,7 +7,6 @@ import logging
 
 from dasapp.EmailBackEnd import EmailBackEnd
 from dasapp.models import CustomUser
-from docappsystem.utils.ip import get_client_ip  # 👈 NEW
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
