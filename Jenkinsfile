@@ -172,6 +172,18 @@ if [ ! -f "\$ENV_PATH" ]; then
     exit 1
 fi
 
+if ! grep -qE "^REDIS_PASSWORD=.+" "\$ENV_PATH"; then
+    echo ""
+    echo "========================================================="
+    echo " ERROR: REDIS_PASSWORD bi thieu hoac khong co trong .env"
+    echo "========================================================="
+    echo " Them dong nay vao file \$ENV_PATH roi chay lai:"
+    echo "   REDIS_PASSWORD=your_strong_password_here"
+    echo "========================================================="
+    exit 1
+fi
+echo "Pre-flight OK – REDIS_PASSWORD co trong .env"
+
 echo "===== [2] BACKUP CURRENT VERSION ====="
 docker tag \${APP_IMAGE}:latest \${APP_IMAGE}:backup || true
 docker tag \${GW_IMAGE}:latest  \${GW_IMAGE}:backup  || true

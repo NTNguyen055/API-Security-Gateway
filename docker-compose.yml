@@ -55,7 +55,7 @@ services:
     container_name: docapp_redis
     restart: unless-stopped
 
-    # ✅ NOTE: password đã đúng nhưng nên đưa vào .env thay vì hardcode
+    # ✅ Password lấy từ .env qua env_file – KHÔNG hardcode trong file này
     command: >
       redis-server
       --maxmemory 100mb
@@ -69,22 +69,26 @@ services:
     volumes:
       - redis_data:/data
 
+    # ✅ env_file để Redis container tự đọc được REDIS_PASSWORD
+    env_file:
+      - /home/ubuntu/appointment-web/.env
+
     environment:
       - TZ=Asia/Ho_Chi_Minh
 
     networks:
       - backend
 
-    # ✅ THÊM: hardening – Redis không cần expose ra ngoài
     security_opt:
       - no-new-privileges:true
 
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      # ✅ FIX: dùng $REDIS_PASSWORD từ env (1 dấu $ – shell của container tự expand)
+      test: ["CMD-SHELL", "redis-cli -a $REDIS_PASSWORD ping | grep PONG"]
       interval: 10s
       timeout: 3s
       retries: 3
-      start_period: 5s    # ✅ THÊM
+      start_period: 5s
 
 
   # ==================== OPENRESTY GATEWAY ====================
