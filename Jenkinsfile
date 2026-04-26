@@ -41,6 +41,7 @@ pipeline {
             steps {
                 sh '''
                 set -e
+                export DOCKER_BUILDKIT=1
 
                 echo "=== BUILD APP IMAGE ==="
                 docker build \
