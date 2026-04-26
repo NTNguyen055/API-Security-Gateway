@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xz-utils \
+    > /dev/null 2>&1
+
 COPY requirements.txt .
 
 RUN pip install --upgrade pip \
