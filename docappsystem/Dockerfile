@@ -10,16 +10,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# 1. Tạo sẵn thư mục man1 để chặn cảnh báo của xz-utils
-# 2. Gộp chung việc cài xz-utils vào đây để tối ưu cache layer
-RUN mkdir -p /usr/share/man/man1 && \
-    apt-get update && apt-get install -y --no-install-recommends \
+# Cài đặt các gói quan trọng trước (vẫn giữ log để theo dõi lỗi nếu có)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
     default-libmysqlclient-dev \
     pkg-config \
     gcc \
-    xz-utils \
+    # Tách riêng xz-utils và ẩn hoàn toàn log của nó
+    && apt-get install -y --no-install-recommends xz-utils > /dev/null 2>&1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

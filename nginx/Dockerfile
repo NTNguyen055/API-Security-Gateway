@@ -16,8 +16,8 @@ RUN mkdir -p $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
 
 # Install libs FIRST
 RUN opm get knyar/nginx-lua-prometheus \
- && opm get openresty/lua-resty-hmac
- 
+ && opm get jkeys089/lua-resty-hmac
+
 # Copy custom code
 COPY lualib/ $LUA_LIB_DIR/
 COPY lua/    $LUA_APP_DIR/
