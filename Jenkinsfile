@@ -124,7 +124,7 @@ echo "===== [1] PREPARE ====="
 mkdir -p "\$BASE_DIR"
 
 if [ ! -d "\$APP_DIR" ]; then
-    git clone --depth 1 [https://github.com/NTNguyen055/API-Security-Gateway.git](https://github.com/NTNguyen055/API-Security-Gateway.git) "\$APP_DIR"
+    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "\$APP_DIR"
 else
     cd "\$APP_DIR"
     git fetch origin
@@ -165,7 +165,7 @@ HTTP_STATUS="000"
 for i in \$(seq 1 15); do
     HTTP_STATUS=\$(curl -k -s -o /dev/null -w "%{http_code}" \\
         --max-time 5 \\
-        [https://127.0.0.1/health/](https://127.0.0.1/health/) || echo "000")
+        https://127.0.0.1/health/ || echo "000")
 
     echo "Attempt \$i → \$HTTP_STATUS"
 
