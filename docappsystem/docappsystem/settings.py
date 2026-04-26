@@ -99,10 +99,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "docappsystem.wsgi.application"
 
-# ================= DATABASE (RDS MySQL) =================
+# ================= DATABASE =================
+# FIX: đọc ENGINE từ env thay vì hardcode mysql.
+# Cho phép Jenkinsfile truyền DB_ENGINE=django.db.backends.sqlite3
+# khi chạy test mà không cần DB thật.
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.mysql",
+        "ENGINE": os.environ.get("DB_ENGINE", "django.db.backends.mysql"),
         "NAME": os.environ.get("DB_NAME"),
         "USER": os.environ.get("DB_USER"),
         "PASSWORD": os.environ.get("DB_PASSWORD"),
@@ -134,7 +137,10 @@ USE_TZ = True
 # ================= STATIC / MEDIA =================
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# FIX: guard tránh warning khi thư mục static/ chưa tồn tại trong container
+_static_dir = BASE_DIR / "static"
+STATICFILES_DIRS = [_static_dir] if _static_dir.exists() else []
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"

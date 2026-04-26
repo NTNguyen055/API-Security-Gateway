@@ -2,6 +2,10 @@ local _M = {}
 
 local lim
 
+-- ================= DEPENDENCIES =================
+local resty_md5 = require "resty.md5"
+local resty_str = require "resty.string"
+
 -- ================= CONFIG =================
 
 local RATE  = tonumber(os.getenv("RATE_LIMIT_RPS"))   or 10
@@ -20,6 +24,22 @@ local SCORE_HARD_REJECT  = 30
 local WHITELIST_IPS = {
     ["127.0.0.1"] = true,
 }
+
+-- ================= HELPERS =================
+
+-- FIX: hash UA để tránh bloat shared memory khi UA biến thiên liên tục
+local function hash_ua(ua)
+    if not ua or ua == "" then return "empty" end
+
+    local m = resty_md5:new()
+    if not m then return "x" end
+
+    m:update(ua)
+    local digest = m:final()
+    if not digest then return "x" end
+
+    return resty_str.to_hex(digest):sub(1, 8)  -- lấy 8 hex chars là đủ
+end
 
 -- ================= LIMITER =================
 
@@ -63,7 +83,7 @@ local function auto_blacklist(ip)
         bl_cache:set(ip, true, AUTO_BL_DURATION)
     end
 
-    -- Async Redis
+    -- Async Redis — dùng key prefix chuẩn bl:v1: để khớp ip_blacklist.lua
     ngx.timer.at(0, function(premature, target_ip, duration)
         if premature then return end
 
@@ -77,7 +97,7 @@ local function auto_blacklist(ip)
             return
         end
 
-        red:set("bl:" .. target_ip, 1, "EX", duration)
+        red:set("bl:v1:" .. target_ip, 1, "EX", duration)
 
         red:set_keepalive(10000, 100)
 
@@ -85,7 +105,6 @@ local function auto_blacklist(ip)
                 " duration=", duration)
     end, ip, AUTO_BL_DURATION)
 
-    -- reset counter nhẹ (không delete hoàn toàn)
     counter_store:set("rl:" .. ip, 0, AUTO_BL_WINDOW)
 end
 
@@ -95,21 +114,18 @@ function _M.run()
     local limiter = get_limiter()
     if not limiter then return nil end  -- fail-open
 
-    -- 🔥 unified IP
     local ip = ngx.ctx.real_ip or ngx.var.remote_addr
 
-    -- init scoring context
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
 
-    -- whitelist
     if WHITELIST_IPS[ip] then
         return nil
     end
 
-    -- key nâng cao (IP + UA)
+    -- FIX: hash UA trước khi ghép vào key → tránh shared memory bloat
     local ua = ngx.var.http_user_agent or ""
-    local key = ip .. ":" .. ua
+    local key = ip .. ":" .. hash_ua(ua)
 
     local delay, err = limiter:incoming(key, true)
 
@@ -123,7 +139,6 @@ function _M.run()
 
             auto_blacklist(ip)
 
-            -- ❗ không block ngay → để pipeline quyết định
             return nil
         end
 
@@ -131,7 +146,6 @@ function _M.run()
         return nil
     end
 
-    -- Burst handling (không block ngay)
     if delay > 0 then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_BURST
         table.insert(ngx.ctx.flags, "rate_limit_burst")

@@ -1,5 +1,9 @@
 local _M = {}
 
+-- ================= DEPENDENCIES =================
+local resty_md5 = require "resty.md5"
+local resty_str = require "resty.string"
+
 -- ================= CONFIG =================
 
 local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
@@ -9,8 +13,23 @@ local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
 local SCORE_REDIS_SOFT = 10
 local SCORE_REDIS_HARD = 25
 
--- Redis circuit breaker (shared dict)
 local REDIS_DOWN_TTL = 5
+
+-- ================= HELPERS =================
+
+-- FIX: hash UA để tránh Redis key quá dài → OOM
+local function hash_ua(ua)
+    if not ua or ua == "" then return "empty" end
+
+    local m = resty_md5:new()
+    if not m then return "x" end
+
+    m:update(ua)
+    local digest = m:final()
+    if not digest then return "x" end
+
+    return resty_str.to_hex(digest):sub(1, 8)
+end
 
 -- ================= REDIS SCRIPT =================
 
@@ -30,7 +49,6 @@ return current
 -- ================= REDIS CONNECT =================
 
 local function get_redis()
-    -- 🔥 circuit breaker
     local cb = ngx.shared.redis_down
     if cb and cb:get("down") then
         return nil, "circuit_open"
@@ -52,14 +70,11 @@ end
 -- ================= CORE =================
 
 function _M.run()
-    -- 🔥 unified IP
     local ip = ngx.ctx.real_ip or ngx.var.remote_addr
 
-    -- init scoring context
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
 
-    -- ❗ Nếu local rate_limit đã flag nặng → skip Redis (tránh double punish)
     if ngx.ctx.flags and table.concat(ngx.ctx.flags, ","):find("rate_limit_hard") then
         return nil
     end
@@ -70,10 +85,10 @@ function _M.run()
         return nil
     end
 
-    -- 🔥 Key nâng cao (IP + UA)
+    -- FIX: hash UA trước khi ghép vào key → tránh Redis key dài → OOM
     local ua = ngx.var.http_user_agent or ""
     local window_id = math.floor(ngx.time() / REDIS_RL_WINDOW)
-    local key = "rrl:" .. ip .. ":" .. ua .. ":" .. window_id
+    local key = "rrl:" .. ip .. ":" .. hash_ua(ua) .. ":" .. window_id
 
     local count, script_err = red:eval(
         REDIS_SCRIPT, 1,

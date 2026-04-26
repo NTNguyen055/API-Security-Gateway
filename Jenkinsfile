@@ -13,8 +13,11 @@ environment {
 
     DOCKERHUB_CREDS = credentials('dockerhub-creds')
     EC2_SSH_CREDS   = 'app-server-ssh'
-    EC2_APP_IP      = '13.159.56.185'
-    EC2_USER        = 'ubuntu'
+
+    // FIX: chuyển IP sang Jenkins credential thay vì hardcode public trên GitHub.
+    // Vào Jenkins → Manage Credentials → thêm "Secret text" với id: ec2-app-ip
+    EC2_APP_IP = credentials('ec2-app-ip')
+    EC2_USER   = 'ubuntu'
 }
 
 stages {
@@ -136,7 +139,7 @@ echo "===== [4] DJANGO INIT (migrate + collectstatic) ====="
 
 docker exec "$APP_CONTAINER" python manage.py migrate --noinput
 
-# collectstatic co the fail nhe → khong nen kill deploy
+# collectstatic co the fail nhe khong nen kill deploy
 docker exec "$APP_CONTAINER" python manage.py collectstatic --noinput || true
 
 echo "===== [5] HEALTH CHECK ====="
@@ -144,7 +147,6 @@ echo "===== [5] HEALTH CHECK ====="
 HTTP_STATUS="000"
 
 for i in $(seq 1 15); do
-    # Tach curl ra bien rieng, tranh loi ket qua bi noi chuoi
     CURL_OUT=$(curl -s -o /dev/null -w "%{http_code}" \
         --max-time 8 \
         --connect-timeout 5 \
@@ -159,7 +161,6 @@ for i in $(seq 1 15); do
         break
     fi
 
-    # In log de debug neu con that bai sau 3 lan
     if [ "$i" = "3" ]; then
         echo "--- Container status ---"
         docker ps --format "table {{.Names}}\t{{.Status}}" || true

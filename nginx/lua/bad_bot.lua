@@ -2,22 +2,19 @@ local _M = {}
 
 -- ================= CONFIG =================
 
--- 🔥 Scanner / attack tools (hard block)
-local scanner_pattern = [[
-\b(sqlmap|nikto|nmap|zgrab|masscan|nuclei|dirbuster|gobuster|wfuzz|ffuf|hydra|acunetix|nessus|zap)\b
-]]
+-- 🔥 Scanner / attack tools (HARD BLOCK)
+local scanner_pattern = [[\b(sqlmap|nikto|nmap|zgrab|masscan|nuclei|dirbuster|gobuster|wfuzz|ffuf|hydra|acunetix|nessus|zap)\b]]
 
--- 🛠 Dev tools (allow nhưng tăng risk nhẹ)
-local dev_pattern = [[
-\b(curl|wget|python-requests|postmanruntime|insomnia|httpie|okhttp)\b
-]]
+-- 🛠 Dev tools
+local dev_pattern = [[\b(curl|wget|python-requests|postmanruntime|insomnia|httpie|okhttp)\b]]
 
--- ✅ Whitelist UA
-local whitelist_pattern = [[
-\b(healthchecker|kube-probe|prometheus|uptime|statuscake)\b
-]]
+-- ✅ Legit bots / monitoring
+local whitelist_pattern = [[\b(healthchecker|kube-probe|prometheus|uptime|statuscake|googlebot|bingbot)\b]]
 
--- ✅ Whitelist IP
+-- ✅ Browser signature (mạnh hơn)
+local browser_pattern = [[(mozilla|chrome|safari|firefox|edge|opera|mobile)]]
+
+-- ✅ IP whitelist
 local WHITELIST_IPS = {
     ["127.0.0.1"] = true,
 }
@@ -29,17 +26,28 @@ local SCORE_SHORT_UA        = 15
 local SCORE_NON_BROWSER     = 5
 local SCORE_SUSPICIOUS_UA   = 20
 
+-- ================= HELPERS =================
+
+local function normalize_ua(ua)
+    if not ua then return "" end
+
+    -- 🔥 truncate để tránh log spam / memory abuse
+    if #ua > 256 then
+        return ua:sub(1, 256)
+    end
+
+    return ua
+end
+
 -- ================= CORE =================
 
 function _M.run()
-    -- 🔥 unified IP (sau xff_guard)
     local ip = ngx.ctx.real_ip or ngx.var.remote_addr
 
-    -- init shared context nếu chưa có
     ngx.ctx.risk_score = ngx.ctx.risk_score or 0
     ngx.ctx.flags      = ngx.ctx.flags or {}
 
-    -- ================= WHITELIST =================
+    -- ================= WHITELIST IP =================
     if WHITELIST_IPS[ip] then
         return nil
     end
@@ -54,9 +62,10 @@ function _M.run()
         ngx.log(ngx.WARN, "[BAD_BOT] Missing UA IP=", ip,
                 " score=", ngx.ctx.risk_score)
 
-        -- chỉ block nếu method nguy hiểm
         local method = ngx.req.get_method()
-        if method ~= "GET" then
+
+        -- 🔥 chỉ block method nguy hiểm
+        if method ~= "GET" and method ~= "HEAD" then
             if metric_blocked then metric_blocked:inc(1, {"empty_ua_block"}) end
             return 403
         end
@@ -64,6 +73,8 @@ function _M.run()
         return nil
     end
 
+    -- normalize
+    ua = normalize_ua(ua)
     local ua_lower = ua:lower()
 
     -- ================= Tier 1: Whitelist =================
@@ -84,7 +95,7 @@ function _M.run()
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_DEV_TOOL
         table.insert(ngx.ctx.flags, "dev_tool")
 
-        ngx.log(ngx.INFO, "[BAD_BOT] Dev tool detected: ", ua,
+        ngx.log(ngx.INFO, "[BAD_BOT] Dev tool: ", ua,
                 " IP=", ip, " score=", ngx.ctx.risk_score)
     end
 
@@ -99,17 +110,17 @@ function _M.run()
                 " IP=", ip, " score=", ngx.ctx.risk_score)
     end
 
-    -- Không giống browser
-    if not ngx.re.find(ua_lower, [[(mozilla|chrome|safari|firefox|edge)]], "jo") then
+    -- Không phải browser
+    if not ngx.re.find(ua_lower, browser_pattern, "jo") then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_NON_BROWSER
         table.insert(ngx.ctx.flags, "non_browser")
 
-        ngx.log(ngx.INFO, "[BAD_BOT] Non-browser UA: ", ua,
+        ngx.log(ngx.INFO, "[BAD_BOT] Non-browser: ", ua,
                 " IP=", ip, " score=", ngx.ctx.risk_score)
     end
 
-    -- UA có dấu hiệu obfuscation (random string, entropy cao)
-    if ngx.re.find(ua, [[^[A-Za-z0-9]{20,}$]], "jo") then
+    -- 🔥 Obfuscation detection (improved)
+    if ngx.re.find(ua, [[^[A-Za-z0-9\-_]{20,}$]], "jo") then
         ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SUSPICIOUS_UA
         table.insert(ngx.ctx.flags, "obfuscated_ua")
 
@@ -118,7 +129,6 @@ function _M.run()
     end
 
     -- ================= FINAL =================
-    -- ❗ Không block ở đây → để pipeline quyết định
     return nil
 end
 
