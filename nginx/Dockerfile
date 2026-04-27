@@ -78,7 +78,7 @@ RUN set -eux \
  # BẮT BUỘC: lua-resty-http >= 0.16 require resty.openssl khi dùng TLS.
  # Dù geo_block.lua chỉ gọi HTTP (không TLS), http_connect.lua vẫn
  # require module này ở load time → crash nếu thiếu.
- && git clone --depth 1 --branch v0.8.25 \
+ && git clone --depth 1 \
     https://github.com/fffonion/lua-resty-openssl.git \
     /tmp/openssl \
  && cp -r /tmp/openssl/lib/resty/* /usr/local/openresty/lualib/resty/ \
