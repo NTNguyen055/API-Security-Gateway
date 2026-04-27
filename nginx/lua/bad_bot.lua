@@ -1,6 +1,18 @@
 local _M = {}
 
+-- ✅ NOTE về Regex flags:
+-- Flag "j"  = PCRE mode (bật JIT compiler của LuaJIT, tốc độ nhanh hơn ~5-10x)
+-- Flag "o"  = compile pattern 1 lần duy nhất, cache lại (không recompile mỗi request)
+-- Flag "jo" = kết hợp cả hai → BẮT BUỘC dùng "jo" ở đây vì:
+--   (1) \b (word boundary) là cú pháp PCRE, KHÔNG phải Lua standard pattern
+--   (2) Nếu dùng flag "" (không có "j"), \b sẽ không được nhận diện → match sai
+-- Tất cả ngx.re.find/match trong file này đều phải dùng "jo".
+
+-- Tier 1 — Scanner độc hại: block ngay 403
+-- \b đảm bảo không false-positive: "curl" trong "scurl" sẽ không bị match
 local scanner_pattern = [[\b(sqlmap|nikto|nmap|zgrab|masscan|nuclei|dirbuster|gobuster)\b]]
+
+-- Tier 2 — Dev tools hợp lệ: allow nhưng log để audit
 local dev_pattern     = [[\b(curl|wget|python-requests|postmanruntime|insomnia|httpie)\b]]
 
 function _M.run()

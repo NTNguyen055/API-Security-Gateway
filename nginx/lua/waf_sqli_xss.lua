@@ -68,12 +68,32 @@ function _M.run()
         end
     end
 
-    -- 3. Body
+    -- 3. Body (POST / PUT)
     local method = ngx.req.get_method()
     if method == "POST" or method == "PUT" then
         ngx.req.read_body()
 
+        -- ✅ FIX: get_body_data() trả nil khi body > client_body_buffer_size (mặc định 8KB,
+        -- đã nâng lên 256KB trong nginx.conf). Khi vượt ngưỡng, Nginx lưu body vào file tạm.
+        -- Phải dùng get_body_file() để đọc tiếp, tránh WAF bỏ qua kiểm tra body lớn.
         local body = ngx.req.get_body_data()
+
+        if not body then
+            -- Body được lưu vào file tạm → đọc file
+            local body_file = ngx.req.get_body_file()
+            if body_file then
+                local f, err = io.open(body_file, "r")
+                if f then
+                    -- Chỉ đọc tối đa 512KB để tránh scan quá tốn CPU
+                    -- Attacker hiếm khi nhét payload > 512KB vì dễ bị timeout
+                    body = f:read(512 * 1024)
+                    f:close()
+                else
+                    ngx.log(ngx.WARN, "[WAF] Cannot read body file: ", err, " IP: ", ip)
+                end
+            end
+        end
+
         if body then
             local code = check(body, ip)
             if code then return code end
