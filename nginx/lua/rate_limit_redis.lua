@@ -1,154 +1,82 @@
 local _M = {}
 
--- ================= CONFIG =================
+--[[
+    DISTRIBUTED RATE LIMIT — Redis Sliding Window
+    -----------------------------------------------
+    Khác biệt so với rate_limit.lua (shared memory):
+    - Shared memory: mỗi Nginx worker có counter riêng → không đồng bộ khi scale
+    - Redis: counter tập trung → chính xác 100% dù có nhiều instance
 
-local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
-local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
+    Thuật toán: Sliding Window Counter dùng Redis INCR + EXPIRE
+    - Mỗi IP có 1 key: "rrl:{ip}:{window}"  (window = unix_time / window_size)
+    - INCR mỗi request, EXPIRE tự reset sau window_size giây
+    - Non-blocking: dùng lua-resty-redis với connection pool
+]]
 
-local SCORE_REDIS_SOFT = 10
-local SCORE_REDIS_HARD = 25
+local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30  -- req/window
+local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60  -- giây
 
-local REDIS_DOWN_TTL = 5
-
-local MAX_KEYS_PER_IP = 100
-
--- ================= SKIP =================
-
-local function is_safe_path(uri)
-    if not uri then return false end
-
-    return uri:find("^/health")
-        or uri:find("^/static")
-        or uri:find("^/media")
+-- Script Lua chạy atomic trên Redis (tránh race condition)
+local REDIS_SCRIPT = [[
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local current = redis.call('INCR', key)
+if current == 1 then
+    redis.call('EXPIRE', key, window)
 end
-
--- ================= REDIS =================
+return current
+]]
 
 local function get_redis()
-    local cb = ngx.shared.redis_down
-
-    if cb and cb:get("down") then
-        return nil, "circuit_open"
-    end
-
     local redis = require "resty.redis"
     local red = redis:new()
-    red:set_timeouts(100, 100, 100)
+    red:set_timeouts(100, 100, 100)  -- timeout ngắn để không block worker
 
     local ok, err = red:connect("redis", 6379)
     if not ok then
-        if cb then cb:set("down", true, REDIS_DOWN_TTL) end
         return nil, err
     end
-
     return red, nil
 end
 
--- ================= LUA SCRIPT =================
--- sliding window (approx bằng 2 bucket)
-
-local REDIS_SCRIPT = [[
-local key = KEYS[1]
-local key_prev = KEYS[2]
-
-local limit = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-
-local current = redis.call("GET", key)
-if not current then current = 0 else current = tonumber(current) end
-
-local prev = redis.call("GET", key_prev)
-if not prev then prev = 0 else prev = tonumber(prev) end
-
-local weight = (window - (now % window)) / window
-local total = current + (prev * weight)
-
-if total >= limit then
-    return {0, total}
-end
-
-current = redis.call("INCR", key)
-if current == 1 then
-    redis.call("EXPIRE", key, window)
-end
-
-return {1, total}
-]]
-
--- ================= CORE =================
-
 function _M.run()
-    local ip  = ngx.ctx.real_ip or ngx.var.remote_addr
-    local uri = ngx.var.uri
-
-    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
-    ngx.ctx.flags      = ngx.ctx.flags or {}
-
-    if is_safe_path(uri) then
-        return nil
-    end
+    local ip = ngx.var.remote_addr
 
     local red, err = get_redis()
     if not red then
-        ngx.log(ngx.WARN, "[REDIS_RL] Redis down → fallback")
-
-        -- 🔥 fallback: tăng risk nhẹ thay vì bỏ qua
-        ngx.ctx.risk_score = ngx.ctx.risk_score + 5
-        table.insert(ngx.ctx.flags, "redis_down")
-
-        return nil
+        ngx.log(ngx.WARN, "[REDIS_RL] Redis unavailable: ", err, " → fail-open")
+        return nil  -- fail-open: dùng shared memory rate limit làm backup
     end
 
-    local now = ngx.time()
-    local window = REDIS_RL_WINDOW
+    -- Sliding window key: thay đổi mỗi REDIS_RL_WINDOW giây
+    local window_id = math.floor(ngx.time() / REDIS_RL_WINDOW)
+    local key = "rrl:" .. ip .. ":" .. window_id
 
-    local curr_bucket = math.floor(now / window)
-    local prev_bucket = curr_bucket - 1
-
-    local key      = "rrl:" .. ip .. ":" .. curr_bucket
-    local key_prev = "rrl:" .. ip .. ":" .. prev_bucket
-
-    local res, script_err = red:eval(
-        REDIS_SCRIPT, 2,
-        key, key_prev,
-        REDIS_RATE_LIMIT,
-        window,
-        now
-    )
+    -- Chạy atomic script
+    local count, script_err = red:eval(REDIS_SCRIPT, 1, key,
+                                       REDIS_RATE_LIMIT, REDIS_RL_WINDOW)
 
     red:set_keepalive(10000, 100)
 
-    if not res then
+    if not count then
         ngx.log(ngx.ERR, "[REDIS_RL] Script error: ", script_err)
-        return nil
+        return nil  -- fail-open
     end
 
-    local allowed = res[1]
-    local total   = res[2]
+    ngx.log(ngx.INFO, "[REDIS_RL] IP=", ip,
+            " count=", count, "/", REDIS_RATE_LIMIT)
 
-    ngx.log(ngx.INFO,
-        "[REDIS_RL] IP=", ip,
-        " total=", total, "/", REDIS_RATE_LIMIT)
-
-    -- ================= DECISION =================
-
-    if allowed == 0 then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_REDIS_HARD
-        table.insert(ngx.ctx.flags, "redis_rate_hard")
-
-        ngx.log(ngx.WARN, "[REDIS_RL] HARD limit IP=", ip)
-
-    elseif total > (REDIS_RATE_LIMIT * 0.7) then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_REDIS_SOFT
-        table.insert(ngx.ctx.flags, "redis_rate_soft")
+    if count > REDIS_RATE_LIMIT then
+        ngx.log(ngx.WARN, "[REDIS_RL] Rate exceeded IP=", ip,
+                " count=", count)
+        if metric_blocked then metric_blocked:inc(1, {"redis_rate_limit"}) end
+        return 429
     end
 
-    -- ================= HEADERS =================
-
-    ngx.header["X-RateLimit-Limit"] = REDIS_RATE_LIMIT
-    ngx.header["X-RateLimit-Remaining"] =
-        math.max(0, REDIS_RATE_LIMIT - total)
+    -- Trả về header thông tin cho client
+    ngx.header["X-RateLimit-Limit"]     = REDIS_RATE_LIMIT
+    ngx.header["X-RateLimit-Remaining"] = math.max(0, REDIS_RATE_LIMIT - count)
 
     return nil
 end

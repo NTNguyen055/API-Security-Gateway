@@ -1,133 +1,40 @@
 local _M = {}
 
--- ================= CONFIG =================
-
-local MAX_UA_LENGTH = 512
-
--- 🔥 Scanner / attack tools (improved)
-local scanner_pattern = [[
-(sqlmap|nikto|nmap|zgrab|masscan|nuclei|
-dirbuster|gobuster|wfuzz|ffuf|hydra|
-acunetix|nessus|zap)
-]]
-
--- Dev tools
-local dev_pattern = [[
-(curl|wget|python-requests|postmanruntime|
-insomnia|httpie|okhttp)
-]]
-
--- Legit bots
-local whitelist_pattern = [[
-(healthchecker|kube-probe|prometheus|
-uptime|statuscake|googlebot|bingbot)
-]]
-
--- Browser signature
-local browser_pattern = [[
-(mozilla|chrome|safari|firefox|edge|opera|mobile)
-]]
-
-local WHITELIST_IPS = {
-    ["127.0.0.1"] = true,
-}
-
--- Risk scoring
-local SCORE_EMPTY_UA        = 10
-local SCORE_DEV_TOOL        = 5
-local SCORE_SHORT_UA        = 10   -- giảm từ 15
-local SCORE_NON_BROWSER     = 3    -- giảm từ 5
-local SCORE_SUSPICIOUS_UA   = 20
-local SCORE_SCANNER         = 40   -- 🔥 không block ngay
-
--- ================= NORMALIZE =================
-
-local function normalize_ua(ua)
-    if not ua then return "" end
-
-    -- limit size
-    if #ua > MAX_UA_LENGTH then
-        ua = ua:sub(1, MAX_UA_LENGTH)
-    end
-
-    -- remove control chars
-    ua = ua:gsub("[%c]", "")
-
-    -- collapse spaces
-    ua = ua:gsub("%s+", " ")
-
-    return ua:lower()
-end
-
--- ================= CORE =================
+local scanner_pattern = [[\b(sqlmap|nikto|nmap|zgrab|masscan|nuclei|dirbuster|gobuster)\b]]
+local dev_pattern     = [[\b(curl|wget|python-requests|postmanruntime|insomnia|httpie)\b]]
 
 function _M.run()
-    local ip = ngx.ctx.real_ip or ngx.var.remote_addr
+    local ip = ngx.var.remote_addr
 
-    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
-    ngx.ctx.flags      = ngx.ctx.flags or {}
-
-    if WHITELIST_IPS[ip] then
-        return nil
-    end
-
+    -- Đọc UA trước khi or "" để check nil/empty đúng
     local ua = ngx.var.http_user_agent
 
-    -- ================= EMPTY =================
+    -- Tier 3: UA rỗng hoặc nil → 403
+    -- Phải check TRƯỚC khi gán or "" vì sau đó ua luôn là string
     if not ua or ua == "" then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_EMPTY_UA
-        table.insert(ngx.ctx.flags, "empty_ua")
+        ngx.log(ngx.WARN, "[BAD_BOT] Empty UA IP: ", ip)
+        if metric_blocked then metric_blocked:inc(1, {"empty_ua"}) end
+        return 403
+    end
 
-        local method = ngx.req.get_method()
-
-        if method ~= "GET" and method ~= "HEAD" then
-            return 403
-        end
-
+    -- Whitelist health check — sau khi đã confirm UA không rỗng
+    if ua:find("HealthChecker", 1, true) then
         return nil
     end
 
-    ua = normalize_ua(ua)
+    local ua_lower = ua:lower()
 
-    -- ================= WHITELIST =================
-    if ngx.re.find(ua, whitelist_pattern, "jo") then
+    -- Tier 1: scanner độc hại → 403
+    if ngx.re.find(ua_lower, scanner_pattern, "jo") then
+        ngx.log(ngx.WARN, "[BAD_BOT] Scanner blocked: ", ua, " IP: ", ip)
+        if metric_blocked then metric_blocked:inc(1, {"bad_bot"}) end
+        return 403
+    end
+
+    -- Tier 2: dev tools → allow + log (curl, Postman, wget...)
+    if ngx.re.find(ua_lower, dev_pattern, "jo") then
+        ngx.log(ngx.INFO, "[BAD_BOT] Dev tool allowed: ", ua, " IP: ", ip)
         return nil
-    end
-
-    -- ================= SCANNER =================
-    if ngx.re.find(ua, scanner_pattern, "jo") then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SCANNER
-        table.insert(ngx.ctx.flags, "scanner")
-
-        ngx.log(ngx.WARN, "[BAD_BOT] Scanner detected IP=", ip, " UA=", ua)
-    end
-
-    -- ================= DEV TOOL =================
-    if ngx.re.find(ua, dev_pattern, "jo") then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_DEV_TOOL
-        table.insert(ngx.ctx.flags, "dev_tool")
-    end
-
-    -- ================= HEURISTICS =================
-
-    if #ua < 10 then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SHORT_UA
-        table.insert(ngx.ctx.flags, "short_ua")
-    end
-
-    -- chỉ áp dụng non-browser cho POST/API
-    local method = ngx.req.get_method()
-    if method ~= "GET" then
-        if not ngx.re.find(ua, browser_pattern, "jo") then
-            ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_NON_BROWSER
-            table.insert(ngx.ctx.flags, "non_browser")
-        end
-    end
-
-    -- obfuscation
-    if ngx.re.find(ua, [[^[a-z0-9\-_]{20,}$]], "jo") then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SUSPICIOUS_UA
-        table.insert(ngx.ctx.flags, "obfuscated_ua")
     end
 
     return nil

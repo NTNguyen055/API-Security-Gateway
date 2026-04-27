@@ -1,183 +1,82 @@
 local _M = {}
 
--- ================= CONFIG =================
-
-local MAX_BODY_SIZE   = 8192
-local MAX_ARGS_SCAN   = 50
-
--- 🔥 SQLi (improved anti-bypass)
+-- SQLi patterns (SAFE VERSION - giảm false positive)
 local sqli_pattern = [[
-(\bunion\b\s*(all\s*)?\bselect\b)|
+(\bunion\s+select\b)|
 (\bselect\b.+\bfrom\b.+\bwhere\b)|
-(\binsert\b\s+into\b)|
-(\bdelete\b\s+from\b)|
-(\bdrop\b\s+table\b)|
-(\bupdate\b.+\bset\b)|
-(\bor\b\s+\d+=\d+)|
-(\band\b\s+\d+=\d+)|
-(--|#|/\*)
+(\binsert\s+into\b)|
+(\bdelete\s+from\b)|
+(\bdrop\s+table\b)|
+(\bupdate\b.+\bset\b)
 ]]
 
--- 🔥 XSS (expanded)
+-- XSS patterns (giữ nguyên nhưng tối ưu nhẹ)
 local xss_pattern = [[
 (<script\b)|
-(<iframe\b)|
-(<svg\b)|
+(javascript\s*:)|
 (onerror\s*=)|
 (onload\s*=)|
-(javascript\s*:)|
-(data\s*:\s*text/html)|
-(document\.cookie)|
-(alert\s*\()|
-(src\s*=\s*javascript)
+(<svg\b)|
+(<img\b.*onerror)
 ]]
 
--- scoring
-local SCORE_SQLI_HIGH = 40
-local SCORE_SQLI_LOW  = 20
-local SCORE_XSS       = 40
-local SCORE_SUSPICIOUS= 10
-
--- ================= SKIP =================
-
-local function is_safe_path(uri)
-    if not uri then return false end
-
-    return uri:find("^/health")
-        or uri:find("^/static")
-        or uri:find("^/media")
-end
-
--- ================= NORMALIZE =================
-
-local function deep_normalize(input)
+local function normalize(input)
     if not input then return "" end
-
-    for _ = 1, 3 do
-        input = ngx.unescape_uri(input)
-    end
-
-    input = string.lower(input)
-    input = input:gsub("%z", "")
-    input = input:gsub("%s+", " ")
-
-    return input
+    input = ngx.unescape_uri(input)
+    return string.lower(input)
 end
 
--- ================= DETECT =================
+local function check(value, ip)
+    local v = normalize(value)
 
-local function detect_sqli(v)
+    -- SQLi check
     if ngx.re.find(v, sqli_pattern, "jo") then
-        if ngx.re.find(v, [[union|select|drop|insert|delete]], "jo") then
-            return "high"
-        end
-        return "low"
+        ngx.log(ngx.WARN, "[WAF][SQLi] Blocked IP: ", ip)
+        if metric_blocked then metric_blocked:inc(1, {"waf_sqli"}) end
+        return 403
     end
+
+    -- XSS check
+    if ngx.re.find(v, xss_pattern, "jo") then
+        ngx.log(ngx.WARN, "[WAF][XSS] Blocked IP: ", ip)
+        if metric_blocked then metric_blocked:inc(1, {"waf_xss"}) end
+        return 403
+    end
+
     return nil
 end
 
-local function detect_xss(v)
-    return ngx.re.find(v, xss_pattern, "jo")
-end
-
--- ================= CHECK =================
-
-local function check_value(value, ip)
-    local v = deep_normalize(value)
-
-    if v == "" then return end
-
-    -- SQLi
-    local sqli_level = detect_sqli(v)
-    if sqli_level then
-        if sqli_level == "high" then
-            ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SQLI_HIGH
-        else
-            ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SQLI_LOW
-        end
-
-        table.insert(ngx.ctx.flags, "sqli")
-
-        ngx.log(ngx.WARN,
-            "[WAF][SQLI] IP=", ip,
-            " level=", sqli_level,
-            " payload=", v)
-
-        return
-    end
-
-    -- XSS
-    if detect_xss(v) then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_XSS
-        table.insert(ngx.ctx.flags, "xss")
-
-        ngx.log(ngx.WARN,
-            "[WAF][XSS] IP=", ip,
-            " payload=", v)
-
-        return
-    end
-
-    -- encoded suspicious
-    if ngx.re.find(v, [[(%27|%22|%3c|%3e)]], "jo") then
-        ngx.ctx.risk_score = ngx.ctx.risk_score + SCORE_SUSPICIOUS
-        table.insert(ngx.ctx.flags, "encoded_payload")
-    end
-end
-
--- ================= MAIN =================
-
 function _M.run()
-    local ip  = ngx.ctx.real_ip or ngx.var.remote_addr
-    local uri = ngx.var.uri
+    local ip = ngx.var.remote_addr
 
-    ngx.ctx.risk_score = ngx.ctx.risk_score or 0
-    ngx.ctx.flags      = ngx.ctx.flags or {}
+    -- 1. URI
+    local uri = ngx.var.request_uri
+    local code = check(uri, ip)
+    if code then return code end
 
-    if is_safe_path(uri) then
-        return nil
-    end
-
-    -- ================= URI =================
-    if uri then
-        check_value(uri, ip)
-    end
-
-    -- ================= QUERY =================
+    -- 2. Query args
     local args = ngx.req.get_uri_args()
-    local count = 0
-
     for _, v in pairs(args) do
-        count = count + 1
-        if count > MAX_ARGS_SCAN then
-            ngx.log(ngx.WARN, "[WAF] Too many args, stop scanning IP=", ip)
-            break
-        end
-
         if type(v) == "table" then
             for _, vv in ipairs(v) do
-                check_value(vv, ip)
+                local code = check(vv, ip)
+                if code then return code end
             end
         else
-            check_value(v, ip)
+            local code = check(v, ip)
+            if code then return code end
         end
     end
 
-    -- ================= BODY =================
+    -- 3. Body
     local method = ngx.req.get_method()
-
-    if method == "POST" or method == "PUT" or method == "PATCH" then
+    if method == "POST" or method == "PUT" then
         ngx.req.read_body()
 
         local body = ngx.req.get_body_data()
-
-        if body and #body < MAX_BODY_SIZE then
-            -- 🔥 tránh false positive JSON
-            if not ngx.re.find(body, [[^\s*\{.*\}\s*$]], "jo") then
-                check_value(body, ip)
-            end
-        elseif body then
-            ngx.log(ngx.WARN, "[WAF] Body too large skip IP=", ip)
+        if body then
+            local code = check(body, ip)
+            if code then return code end
         end
     end
 

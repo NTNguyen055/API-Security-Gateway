@@ -5,20 +5,15 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_ROOT_USER_ACTION=ignore \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_ROOT_USER_ACTION=ignore
 
-# Cài đặt các gói quan trọng trước (vẫn giữ log để theo dõi lỗi nếu có)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
     default-libmysqlclient-dev \
     pkg-config \
     gcc \
-    # Tách riêng xz-utils và ẩn hoàn toàn log của nó
-    && apt-get install -y --no-install-recommends xz-utils > /dev/null 2>&1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -34,57 +29,43 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_ROOT_USER_ACTION=ignore \
-    PYTHONUNBUFFERED=1 \
-    PYTHONOPTIMIZE=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    DJANGO_SETTINGS_MODULE=docappsystem.settings
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV PYTHONUNBUFFERED=1
 
-# Runtime deps nhẹ
+# Giảm bytecode size
+ENV PYTHONOPTIMIZE=1
+
+# Chỉ giữ runtime dependency (nhẹ hơn)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy wheels
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir /wheels/* \
  && rm -rf /wheels
 
-# Copy source
 COPY . .
 
-# =========================
-# SECURITY
-# =========================
-RUN useradd -m -u 1001 appuser \
- && chown -R appuser:appuser /app
+# COLLECT STATIC (nếu dùng Django static)
+RUN python manage.py collectstatic --noinput
 
+# SECURITY: chạy non-root
+RUN useradd -m appuser
 USER appuser
 
-# =========================
-# NETWORK
-# =========================
 EXPOSE 8000
 
-# =========================
-# HEALTHCHECK
-# =========================
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
- CMD curl -fs http://localhost:8000/health/ || exit 1
+# 🔥 HEALTHCHECK
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD \
+  curl -f http://localhost:8000/health/ || exit 1
 
-# =========================
-# GUNICORN (AUTO SCALE)
-# =========================
-CMD ["sh", "-c", "gunicorn docappsystem.wsgi:application \
-    --bind 0.0.0.0:8000 \
-    --workers $(nproc) \
-    --threads 2 \
-    --timeout 90 \
-    --keep-alive 5 \
-    --max-requests 1000 \
-    --max-requests-jitter 100 \
-    --preload"]
+# 🔥 GUNICORN (tuned)
+CMD ["gunicorn", "docappsystem.wsgi:application", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "3", \
+     "--threads", "2", \
+     "--timeout", "90"]

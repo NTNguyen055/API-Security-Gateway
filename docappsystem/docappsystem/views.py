@@ -1,153 +1,104 @@
-from django.shortcuts import render, redirect, HttpResponse
-from django.contrib.auth import logout, login
+from django.shortcuts import render,redirect,HttpResponse
+from dasapp.EmailBackEnd import EmailBackEnd
+from django.contrib.auth import  logout,login
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth import get_user_model
-import logging
-
-from dasapp.EmailBackEnd import EmailBackEnd
 from dasapp.models import CustomUser
+from django.contrib.auth import get_user_model
 
-logger = logging.getLogger(__name__)
 User = get_user_model()
-
-def get_client_ip(request):
-    headers = request.META
-
-    ip = headers.get("HTTP_X_REAL_IP")
-
-    if not ip:
-        x_forwarded_for = headers.get("HTTP_X_FORWARDED_FOR")
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(",")[0].strip()
-
-    if not ip:
-        ip = headers.get("REMOTE_ADDR")
-
-    return ip
-
-# ================= BASE =================
 def BASE(request):
-    return render(request, 'base.html')
+    return render(request,'base.html')
 
 
-# ================= LOGIN =================
 def LOGIN(request):
-    return render(request, 'login.html')
+    return render(request,'login.html')
 
-
-def doLogin(request):
-    if request.method != 'POST':
-        messages.error(request, 'Invalid request method')
-        return redirect('login')
-
-    email = request.POST.get('email')
-    password = request.POST.get('password')
-
-    if not email or not password:
-        messages.error(request, 'Missing credentials')
-        return redirect('login')
-
-    ip = get_client_ip(request)
-
-    user = EmailBackEnd.authenticate(
-        request,
-        username=email,
-        password=password
-    )
-
-    if user:
-        login(request, user)
-
-        logger.info(f"[LOGIN SUCCESS] user={email} ip={ip}")
-
-        if user.user_type == '1':
-            return redirect('admin_home')
-        elif user.user_type == '2':
-            return redirect('doctor_home')
-        elif user.user_type == '3':
-            return HttpResponse("User panel")
-
-    logger.warning(f"[LOGIN FAIL] user={email} ip={ip}")
-
-    messages.error(request, 'Email or Password is not valid')
-    return redirect('login')
-
-
-# ================= LOGOUT =================
 def doLogout(request):
     logout(request)
     return redirect('login')
 
+def doLogin(request):
+    if request.method == 'POST':
+        user = EmailBackEnd.authenticate(request,
+                                         username=request.POST.get('email'),
+                                         password=request.POST.get('password')
+                                         )
+        if user!=None:
+            login(request,user)
+            user_type = user.user_type
+            if user_type == '1':
+                 return redirect('admin_home')
+            elif user_type == '2':
+                 return redirect('doctor_home')
+            elif user_type == '3':
+                return HttpResponse("This is User panel")
+            
+            
+        else:
+                messages.error(request,'Email or Password is not valid')
+                return redirect('login')
+    else:
+            messages.error(request,'Email or Password is not valid')
+            return redirect('login')
 
-# ================= PROFILE =================
-@login_required(login_url='/auth/login/')
+
+login_required(login_url='/')
 def PROFILE(request):
-    user = CustomUser.objects.get(id=request.user.id)
-    return render(request, 'profile.html', {"user": user})
-
-
-@login_required(login_url='/auth/login/')
+    user = CustomUser.objects.get(id = request.user.id)
+    context = {
+        "user":user,
+    }
+    return render(request,'profile.html',context)
+@login_required(login_url = '/')
 def PROFILE_UPDATE(request):
-    if request.method != "POST":
-        return redirect('profile')
-
-    try:
-        user = CustomUser.objects.get(id=request.user.id)
-
-        user.first_name = request.POST.get('first_name', '').strip()
-        user.last_name = request.POST.get('last_name', '').strip()
-
+    if request.method == "POST":
         profile_pic = request.FILES.get('profile_pic')
+        first_name = request.POST.get('first_name')
+        last_name = request.POST.get('last_name')
+        email = request.POST.get('email')
+        username = request.POST.get('username')
+        print(profile_pic)
+        
 
-        # ✅ FILE VALIDATION
-        if profile_pic:
-            if profile_pic.size > 2 * 1024 * 1024:
-                messages.error(request, "File too large (max 2MB)")
-                return redirect('profile')
+        try:
+            customuser = CustomUser.objects.get(id = request.user.id)
+            customuser.first_name = first_name
+            customuser.last_name = last_name
+            
 
-            if not profile_pic.content_type.startswith("image/"):
-                messages.error(request, "Invalid file type")
-                return redirect('profile')
+            
+            if profile_pic !=None and profile_pic != "":
+               customuser.profile_pic = profile_pic
+            customuser.save()
+            messages.success(request,"Your profile has been updated successfully")
+            return redirect('profile')
 
-            user.profile_pic = profile_pic
-
-        user.save()
-
-        messages.success(request, "Profile updated successfully")
-        return redirect('profile')
-
-    except Exception as e:
-        logger.error(f"[PROFILE UPDATE ERROR] {str(e)}")
-        messages.error(request, "Profile update failed")
-        return redirect('profile')
+        except:
+            messages.error(request,"Your profile updation has been failed")
+    return render(request, 'profile.html')
 
 
-# ================= CHANGE PASSWORD =================
-@login_required(login_url='/auth/login/')
 def CHANGE_PASSWORD(request):
-
-    if request.method != "POST":
-        return render(request, 'change-password.html')
-
-    current = request.POST.get("cpwd")
-    new_password = request.POST.get("npwd")
-
-    if not current or not new_password:
-        messages.error(request, "Missing password fields")
-        return redirect("change_password")
-
-    user = request.user
-
-    if not user.check_password(current):
-        messages.error(request, "Current password is wrong")
-        return redirect("change_password")
-
-    user.set_password(new_password)
-    user.save()
-
-    # Re-login
-    login(request, user)
-
-    messages.success(request, "Password changed successfully")
-    return redirect("profile")
+     context ={}
+     ch = User.objects.filter(id = request.user.id)
+     
+     if len(ch)>0:
+            data = User.objects.get(id = request.user.id)
+            context["data"]:data             # type: ignore
+     if request.method == "POST":        
+        current = request.POST["cpwd"]
+        new_pas = request.POST['npwd']
+        user = User.objects.get(id = request.user.id)
+        un = user.username
+        check = user.check_password(current)
+        if check == True:
+          user.set_password(new_pas)
+          user.save()
+          messages.success(request,'Password Change  Succeesfully!!!')
+          user = User.objects.get(username=un)
+          login(request,user)
+        else:
+          messages.success(request,'Current Password wrong!!!')
+          return redirect("change_password")
+     return render(request,'change-password.html')

@@ -1,75 +1,67 @@
-FROM openresty/openresty:1.25.3.1-alpine-fat
+FROM openresty/openresty:alpine-fat
 
-# ✅ BUILD-TIME METADATA
-ARG BUILD_DATE
-ARG GIT_COMMIT
-LABEL org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${GIT_COMMIT}" \
-      org.opencontainers.image.title="api-security-gateway" \
-      org.opencontainers.image.description="OpenResty + Lua adaptive security gateway"
-
-# ✅ GROUP install → 1 layer duy nhất, tránh cache bloat
+# ================= BASE =================
 RUN apk add --no-cache \
-        ca-certificates \
-        curl \
-        tzdata \
-        libmaxminddb \
+    git \
+    curl \
+    ca-certificates \
     && update-ca-certificates
 
-ENV LUA_LIB_DIR=/usr/local/openresty/lualib \
-    LUA_APP_DIR=/usr/local/openresty/nginx/lua \
-    GEOIP_DIR=/etc/geoip \
-    NGINX_DIR=/usr/local/openresty/nginx
+# ================= LUA DIR =================
+RUN mkdir -p /usr/local/openresty/lualib/resty
 
-RUN mkdir -p $LUA_LIB_DIR $LUA_APP_DIR $GEOIP_DIR
+# ================= LUA MODULES =================
 
-# ✅ Install OPM packages trước (layer cache ổn định hơn)
-RUN opm get knyar/nginx-lua-prometheus \
- && opm get jkeys089/lua-resty-hmac
+# ---------------- HMAC ----------------
+RUN git clone --depth 1 https://github.com/jkeys089/lua-resty-hmac.git /tmp/hmac \
+ && cp /tmp/hmac/lib/resty/hmac.lua /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/hmac
 
-# ✅ Copy custom libs / lua / config / geoip
-COPY lualib/ $LUA_LIB_DIR/
-COPY lua/     $LUA_APP_DIR/
-COPY geoip/   $GEOIP_DIR/
-COPY nginx.conf $NGINX_DIR/conf/nginx.conf
+# ---------------- JWT ----------------
+RUN git clone --depth 1 https://github.com/SkyLothar/lua-resty-jwt.git /tmp/jwt \
+ && cp -r /tmp/jwt/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/jwt
 
-# ✅ VERIFY: GeoIP DB và lib load được
-RUN test -f /etc/geoip/GeoLite2-Country.mmdb
+# ---------------- REDIS ----------------
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-redis.git /tmp/redis \
+ && cp -r /tmp/redis/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/redis
 
-RUN /usr/local/openresty/bin/resty -e "require 'resty.redis'"
-RUN /usr/local/openresty/bin/resty -e "require 'resty.jwt'"
-RUN /usr/local/openresty/bin/resty -e "require 'resty.limit.req'"
-RUN /usr/local/openresty/bin/resty -e "require 'resty.maxminddb'"
+# ---------------- HTTP ----------------
+RUN git clone --depth 1 https://github.com/ledgetech/lua-resty-http.git /tmp/http \
+ && cp -r /tmp/http/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/http
 
-# ✅ VERIFY nginx.conf syntax trước khi build xong
-RUN openresty -t -c $NGINX_DIR/conf/nginx.conf 2>&1 | grep -v "^nginx:" || true
+# ---------------- PROMETHEUS (FIXED) ----------------
+RUN git clone --depth 1 https://github.com/knyar/nginx-lua-prometheus.git /tmp/prom \
+ && cp -r /tmp/prom/* /usr/local/openresty/lualib/ \
+ && rm -rf /tmp/prom
 
-# ✅ Tạo user/group không có shell (security hardening)
-RUN addgroup -S nginxgrp \
- && adduser -S -H -s /sbin/nologin nginxusr -G nginxgrp
+# ---------------- STRING ----------------
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-string.git /tmp/string \
+ && cp -r /tmp/string/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/string
 
-# ✅ Tạo đủ thư mục temp/log mà nginx cần; gán quyền 1 lần
-RUN mkdir -p \
-        $NGINX_DIR/client_body_temp \
-        $NGINX_DIR/proxy_temp \
-        $NGINX_DIR/fastcgi_temp \
-        $NGINX_DIR/uwsgi_temp \
-        $NGINX_DIR/scgi_temp \
-        $NGINX_DIR/logs \
-    && chown -R nginxusr:nginxgrp \
-        $NGINX_DIR \
-        $LUA_LIB_DIR \
-        $LUA_APP_DIR \
-        $GEOIP_DIR \
-    && chmod 750 $NGINX_DIR/logs   # ✅ tránh log readable bởi others
+# ---------------- LIMIT TRAFFIC ----------------
+RUN git clone --depth 1 https://github.com/openresty/lua-resty-limit-traffic.git /tmp/limit \
+ && cp -r /tmp/limit/lib/resty/* /usr/local/openresty/lualib/resty/ \
+ && rm -rf /tmp/limit
 
-# ✅ Drop root TRƯỚC khi expose
-USER nginxusr
+# ================= CONFIG =================
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD curl -sf -A "HealthChecker/1.0" http://127.0.0.1/health/ || exit 1
+# Copy tất cả Lua modules (bao gồm geo_block.lua và rate_limit_redis.lua mới)
+COPY lua/ /usr/local/openresty/nginx/lua/
 
+# ================= VERIFY =================
+# Kiểm tra cjson có sẵn trong OpenResty (dùng bởi geo_block.lua)
+RUN /usr/local/openresty/bin/resty -e "require 'cjson'; print('cjson OK')"
+
+# ================= PERMISSIONS =================
+RUN chmod -R 755 /usr/local/openresty/lualib
+
+# ================= PORT =================
 EXPOSE 80 443
 
-# ✅ Dùng exec form (không qua shell), tránh PID 1 = sh
+# ================= RUN =================
 CMD ["openresty", "-g", "daemon off;"]
