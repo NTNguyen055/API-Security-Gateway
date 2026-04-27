@@ -21,12 +21,15 @@ pipeline {
         stage('Build Images') {
             steps {
                 sh '''
-                docker builder prune -f
+                echo "== CLEAN BEFORE BUILD =="
+                docker system prune -af || true
 
+                echo "== BUILD APP IMAGE =="
                 docker build -t $APP_IMAGE:$IMAGE_TAG \
                              -t $APP_IMAGE:latest \
                              ./docappsystem
 
+                echo "== BUILD GATEWAY IMAGE =="
                 docker build -t $GW_IMAGE:$IMAGE_TAG \
                              -t $GW_IMAGE:latest \
                              ./nginx
@@ -37,7 +40,7 @@ pipeline {
         stage('Test (optional)') {
             steps {
                 sh '''
-                echo "Running Django tests (optional)..."
+                echo "Running Django tests..."
 
                 OUTPUT=$(docker run --rm \
                     --entrypoint "" \
@@ -68,9 +71,21 @@ pipeline {
             }
         }
 
+        stage('Cleanup Local Images (Jenkins Node)') {
+            steps {
+                sh '''
+                echo "== REMOVE UNUSED IMAGES AFTER PUSH =="
+                docker rmi $APP_IMAGE:$IMAGE_TAG || true
+                docker rmi $GW_IMAGE:$IMAGE_TAG || true
+
+                docker system prune -af || true
+                docker volume prune -f || true
+                '''
+            }
+        }
+
         stage('Deploy & Smart Rollback') {
             steps {
-                // Bước 1: Ghi script ra file vật lý, tránh heredoc lồng nhau
                 writeFile file: '/tmp/deploy_script.sh', text: '''#!/bin/bash
 set -e
 
@@ -117,12 +132,12 @@ STATUS_GW=$(docker inspect -f "{{.State.Running}}" openresty_gateway 2>/dev/null
 
 HTTP_STATUS="000"
 
-for i in 1 2 3 4 5 6 7 8 9 10; do
-    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \\
-        --max-time 5 \\
-        --connect-timeout 3 \\
-        -A "HealthChecker/1.0" \\
-        -H "Host: dacn3.duckdns.org" \\
+for i in {1..10}; do
+    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 5 \
+        --connect-timeout 3 \
+        -A "HealthChecker/1.0" \
+        -H "Host: dacn3.duckdns.org" \
         http://127.0.0.1/health/ 2>/dev/null || echo "000")
 
     echo "Try $i -> HTTP=$HTTP_STATUS"
@@ -136,8 +151,8 @@ done
 
 echo "APP=$STATUS_APP GW=$STATUS_GW HTTP=$HTTP_STATUS"
 
-if [ "$STATUS_APP" != "healthy" ] || \\
-   [ "$STATUS_GW" != "true" ] || \\
+if [ "$STATUS_APP" != "healthy" ] || \
+   [ "$STATUS_GW" != "true" ] || \
    [ "$HTTP_STATUS" != "200" ]; then
 
     echo "DEPLOY FAIL -> ROLLBACK"
@@ -152,13 +167,15 @@ if [ "$STATUS_APP" != "healthy" ] || \\
 fi
 
 echo "DEPLOY SUCCESS"
-docker image prune -f
+
+echo "--- CLEANUP SERVER ---"
+docker system prune -af
+docker volume prune -f
 
 rm -f /tmp/deploy_script.sh
 '''
 
                 sshagent(credentials: [EC2_SSH_CREDS]) {
-                    // Bước 2: Copy script lên server rồi chạy
                     sh """
                     scp -o StrictHostKeyChecking=no /tmp/deploy_script.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_script.sh
                     ssh -o StrictHostKeyChecking=no -T ${EC2_USER}@${EC2_APP_IP} 'bash /tmp/deploy_script.sh'
