@@ -1,98 +1,98 @@
 pipeline {
-agent any
 
-```
-options {
-    timestamps()
-    disableConcurrentBuilds()
-}
+    agent any
 
-environment {
-    APP_IMAGE = 'ntnguyen055/api-security-app'
-    GW_IMAGE  = 'ntnguyen055/api-security-gateway'
-    IMAGE_TAG = "v${BUILD_NUMBER}"
-
-    DOCKERHUB_CREDS = credentials('dockerhub-creds')
-    EC2_SSH_CREDS   = 'app-server-ssh'
-    EC2_APP_IP      = '13.159.56.185'
-    EC2_USER        = 'ubuntu'
-}
-
-stages {
-
-    stage('Checkout') {
-        steps {
-            cleanWs()
-            checkout scm
-        }
+    options {
+        timestamps()
+        disableConcurrentBuilds()
     }
 
-    stage('Build Images') {
-        steps {
-            sh '''
-            set -e
+    environment {
+        APP_IMAGE = 'ntnguyen055/api-security-app'
+        GW_IMAGE  = 'ntnguyen055/api-security-gateway'
+        IMAGE_TAG = "v${BUILD_NUMBER}"
 
-            docker build \
-                -t $APP_IMAGE:$IMAGE_TAG \
-                -t $APP_IMAGE:latest \
-                ./docappsystem
-
-            docker build \
-                -t $GW_IMAGE:$IMAGE_TAG \
-                -t $GW_IMAGE:latest \
-                ./nginx
-            '''
-        }
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
+        EC2_SSH_CREDS   = 'app-server-ssh'
+        EC2_APP_IP      = '13.159.56.185'
+        EC2_USER        = 'ubuntu'
     }
 
-    stage('Test (Safe Fail)') {
-        steps {
-            sh '''
-            set +e
+    stages {
 
-            echo "Running Django tests..."
-
-            OUTPUT=$(docker run --rm \
-                --entrypoint "" \
-                -e DEBUG=True \
-                -e SECRET_KEY=test-key \
-                -e JWT_SECRET_KEY=test-jwt \
-                -e DB_ENGINE=django.db.backends.sqlite3 \
-                -e DB_NAME=/tmp/test.db \
-                $APP_IMAGE:$IMAGE_TAG \
-                python manage.py test --verbosity=2 2>&1)
-
-            echo "$OUTPUT"
-
-            echo "$OUTPUT" | grep -q "FAILED"
-            if [ $? -eq 0 ]; then
-                echo "TEST FAILED"
-                exit 1
-            fi
-
-            echo "TEST PASSED"
-            '''
+        stage('Checkout') {
+            steps {
+                cleanWs()
+                checkout scm
+            }
         }
-    }
 
-    stage('Push Images') {
-        steps {
-            sh '''
-            echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin
+        stage('Build Images') {
+            steps {
+                sh '''
+                set -e
 
-            docker push $APP_IMAGE:$IMAGE_TAG
-            docker push $APP_IMAGE:latest
+                docker build \
+                    -t $APP_IMAGE:$IMAGE_TAG \
+                    -t $APP_IMAGE:latest \
+                    ./docappsystem
 
-            docker push $GW_IMAGE:$IMAGE_TAG
-            docker push $GW_IMAGE:latest
-            '''
+                docker build \
+                    -t $GW_IMAGE:$IMAGE_TAG \
+                    -t $GW_IMAGE:latest \
+                    ./nginx
+                '''
+            }
         }
-    }
 
-    stage('Deploy & Smart Rollback') {
-        steps {
+        stage('Test (Safe Fail)') {
+            steps {
+                sh '''
+                set +e
 
-            writeFile file: '/tmp/deploy_script.sh', text: '''#!/bin/bash
+                echo "Running Django tests..."
+
+                OUTPUT=$(docker run --rm \
+                    --entrypoint "" \
+                    -e DEBUG=True \
+                    -e SECRET_KEY=test-key \
+                    -e JWT_SECRET_KEY=test-jwt \
+                    -e DB_ENGINE=django.db.backends.sqlite3 \
+                    -e DB_NAME=/tmp/test.db \
+                    $APP_IMAGE:$IMAGE_TAG \
+                    python manage.py test --verbosity=2 2>&1)
+
+                echo "$OUTPUT"
+
+                echo "$OUTPUT" | grep -q "FAILED"
+                if [ $? -eq 0 ]; then
+                    echo "TEST FAILED"
+                    exit 1
+                fi
+
+                echo "TEST PASSED"
+                '''
+            }
+        }
+
+        stage('Push Images') {
+            steps {
+                sh '''
+                echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin
+
+                docker push $APP_IMAGE:$IMAGE_TAG
+                docker push $APP_IMAGE:latest
+
+                docker push $GW_IMAGE:$IMAGE_TAG
+                docker push $GW_IMAGE:latest
+                '''
+            }
+        }
+
+        stage('Deploy & Smart Rollback') {
+            steps {
+
+                writeFile file: '/tmp/deploy_script.sh', text: '''#!/bin/bash
 ```
 
 set -e
@@ -201,27 +201,26 @@ rm -f /tmp/deploy_script.sh
 '''
 
 ```
-            sshagent(credentials: [EC2_SSH_CREDS]) {
-                sh """
-                scp -o StrictHostKeyChecking=no /tmp/deploy_script.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_script.sh
-                ssh -o StrictHostKeyChecking=no -T ${EC2_USER}@${EC2_APP_IP} 'bash /tmp/deploy_script.sh'
-                """
+                sshagent(credentials: [EC2_SSH_CREDS]) {
+                    sh """
+                    scp -o StrictHostKeyChecking=no /tmp/deploy_script.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_script.sh
+                    ssh -o StrictHostKeyChecking=no -T ${EC2_USER}@${EC2_APP_IP} 'bash /tmp/deploy_script.sh'
+                    """
+                }
             }
         }
     }
-}
 
-post {
-    always {
-        sh 'docker logout || true'
+    post {
+        always {
+            sh 'docker logout || true'
+        }
+        failure {
+            echo "❌ PIPELINE FAILED"
+        }
+        success {
+            echo "✅ DEPLOY SUCCESSFUL"
+        }
     }
-    failure {
-        echo "❌ PIPELINE FAILED"
-    }
-    success {
-        echo "✅ DEPLOY SUCCESSFUL"
-    }
-}
-```
 
 }
