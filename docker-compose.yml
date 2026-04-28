@@ -15,20 +15,21 @@ services:
 
     depends_on:
       redis:
-        condition: service_healthy   
+        condition: service_healthy
 
     command: >
       sh -c "
-      python manage.py migrate &&
+      until python manage.py migrate; do sleep 3; done &&
       python manage.py collectstatic --noinput &&
-      gunicorn docappsystem.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60
-      " 
+      gunicorn docappsystem.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 60
+      "
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s   
+      start_period: 30s
 
     networks:
       - internal
@@ -45,6 +46,9 @@ services:
       --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
+
+    volumes:
+      - redis_data:/data
 
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -69,17 +73,31 @@ services:
     env_file:
       - /home/ubuntu/appointment-web/.env
 
+    environment:
+      RATE_LIMIT_RPS: 10
+      RATE_LIMIT_BURST: 20
+      REDIS_RATE_LIMIT: 30
+      REDIS_RL_WINDOW: 60
+      AUTO_BL_THRESHOLD: 5
+      AUTO_BL_WINDOW: 60
+      AUTO_BL_DURATION: 3600
+
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/html:/var/www/html:ro
+      - ./logs/nginx:/usr/local/openresty/nginx/logs
 
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
     healthcheck:
       test: ["CMD", "curl", "-sf",
              "-A", "HealthChecker/1.0",
              "-H", "Host: dacn3.duckdns.org",
+             "-H", "X-Forwarded-For: 127.0.0.1",
              "http://localhost/health/"]
       interval: 20s
       timeout: 5s
@@ -95,7 +113,10 @@ services:
         hard: 65535
 
 
-# ================= NETWORK =================
 networks:
   internal:
     driver: bridge
+    internal: true
+
+volumes:
+  redis_data:

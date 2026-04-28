@@ -1,18 +1,11 @@
 local _M = {}
 
--- ============================================================
--- RATE LIMIT — FINAL (HIGH PERFORMANCE + SAFE)
--- ============================================================
-
 local ngx = ngx
 local tonumber = tonumber
 local math_min = math.min
 
 local lim
 
--- ============================================================
--- INIT LIMITER (SINGLETON)
--- ============================================================
 local function get_limiter()
     if lim then
         return lim
@@ -33,41 +26,31 @@ local function get_limiter()
     return lim
 end
 
--- ============================================================
--- AUTO BLACKLIST CONFIG
--- ============================================================
 local AUTO_BL_THRESHOLD = tonumber(os.getenv("AUTO_BL_THRESHOLD")) or 5
 local AUTO_BL_WINDOW    = tonumber(os.getenv("AUTO_BL_WINDOW"))    or 60
 local AUTO_BL_DURATION  = tonumber(os.getenv("AUTO_BL_DURATION"))  or 3600
 
--- ============================================================
--- AUTO BLACKLIST (SAFE + THROTTLED)
--- ============================================================
-local function auto_blacklist(ip)
+local function auto_blacklist(ip, ctx)
     local counter_store = ngx.shared.rl_counter
     if not counter_store then return end
 
-    -- đếm số lần vi phạm
     local count = counter_store:incr("rl:" .. ip, 1, 0, AUTO_BL_WINDOW)
     if not count then return end
 
-    if count < AUTO_BL_THRESHOLD then
+    if count < AUTO_BL_THRESHOLD or (ctx.security.risk or 0) < 50 then
         return
     end
 
-    -- tránh spawn nhiều timer
     local lock = counter_store:add("bl_lock:" .. ip, true, 5)
     if not lock then
         return
     end
 
-    -- L1 cache ngay lập tức
     local bl_cache = ngx.shared.ip_blacklist
     if bl_cache then
         bl_cache:set(ip, true, AUTO_BL_DURATION)
     end
 
-    -- async Redis (non-blocking)
     ngx.timer.at(0, function(premature, target_ip, duration)
         if premature then return end
 
@@ -79,51 +62,42 @@ local function auto_blacklist(ip)
             return
         end
 
-        local ok = red:sadd("blacklist_ips", target_ip)
-        if not ok then
-            ngx.log(ngx.ERR, "[AUTO_BL] Redis SADD failed")
-        end
+        -- TTL-based blacklist (adaptive friendly)
+        red:set("blacklist:" .. target_ip, 1, "EX", duration)
 
-        red:set("bl_time:" .. target_ip, ngx.time(), "EX", duration)
         red:set_keepalive(10000, 100)
 
         ngx.log(ngx.WARN, "[AUTO_BL] BLACKLISTED: ", target_ip)
     end, ip, AUTO_BL_DURATION)
 
-    -- reset counter
     counter_store:delete("rl:" .. ip)
 end
 
--- ============================================================
--- MAIN
--- ============================================================
 function _M.run(ctx)
     local limiter = get_limiter()
     if not limiter then
-        return -- fail-open
+        return
     end
 
-    local ip  = ngx.var.remote_addr
-    local key = ngx.var.binary_remote_addr
+    local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
+    local uri = ngx.var.uri or ""
+    local key = ip .. ":" .. uri
 
     ctx.security = ctx.security or {}
+    ctx.security.signals = ctx.security.signals or {}
 
     local delay, err = limiter:incoming(key, true)
 
-    -- ========================================================
-    -- HARD REJECT (ABUSE)
-    -- ========================================================
     if not delay then
         if err == "rejected" then
             ctx.security.rate_limit_hard = true
+            ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
 
-            local r = (ctx.security.risk or 0) + 30
-            ctx.security.risk = math_min(r, 100)
+            table.insert(ctx.security.signals, "rate_limit_hard")
 
             ngx.log(ngx.WARN, "[RATE_LIMIT] HARD IP=", ip)
 
-            -- chỉ blacklist khi HARD
-            auto_blacklist(ip)
+            auto_blacklist(ip, ctx)
             return
         end
 
@@ -131,16 +105,13 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- BURST (SOFT ABUSE)
-    -- ========================================================
     if delay > 0 then
+        ngx.sleep(delay)
+
         ctx.security.rate_limit_burst = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
 
-        local r = (ctx.security.risk or 0) + 15
-        ctx.security.risk = math_min(r, 100)
-
-        -- KHÔNG blacklist ở mức này (tránh false positive)
+        table.insert(ctx.security.signals, "rate_limit_burst")
 
         ngx.log(ngx.WARN,
             "[RATE_LIMIT] BURST IP=", ip,
@@ -150,10 +121,8 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- NORMAL
-    -- ========================================================
     ctx.security.rate_ok = true
+    table.insert(ctx.security.signals, "rate_ok")
 end
 
 return _M

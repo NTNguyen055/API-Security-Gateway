@@ -1,16 +1,8 @@
 local _M = {}
 
--- ============================================================
--- WAF SQLi + XSS — FINAL (FAST + LOW OVERHEAD)
--- ============================================================
-
 local ngx = ngx
 local re_find = ngx.re.find
 local math_min = math.min
-
--- ============================================================
--- PATTERNS (OPTIMIZED)
--- ============================================================
 
 local SQLI_PATTERN = [[
 \bunion\b.{0,10}\bselect\b|
@@ -31,47 +23,47 @@ document\.cookie|
 <iframe\b
 ]]
 
--- ============================================================
--- NORMALIZE (LIGHTWEIGHT)
--- ============================================================
-
 local function normalize(input)
     if not input then return "" end
 
-    -- decode tối đa 2 lần (anti double encode)
     input = ngx.unescape_uri(input)
     input = ngx.unescape_uri(input)
 
     input = input:lower()
 
-    -- remove SQL comments (nhẹ hơn)
     input = input:gsub("/%*.-%*/", "")
+    input = input:gsub("%s+", " ")
 
     return input
 end
-
--- ============================================================
--- CHECK (EARLY EXIT)
--- ============================================================
 
 local function check(value, ctx)
     if not value then return false end
 
     local v = normalize(value)
 
-    -- SQLi
     if re_find(v, SQLI_PATTERN, "ijo") then
         ctx.security.waf_sqli = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 40, 100)
+
+        local base = 30
+        if ctx.security.bad_bot then base = base + 10 end
+
+        ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
+
+        ctx.security.signals = ctx.security.signals or {}
+        table.insert(ctx.security.signals, "waf_sqli")
 
         ngx.log(ngx.WARN, "[WAF][SQLi]")
         return true
     end
 
-    -- XSS
     if re_find(v, XSS_PATTERN, "ijo") then
         ctx.security.waf_xss = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+
+        ctx.security.signals = ctx.security.signals or {}
+        table.insert(ctx.security.signals, "waf_xss")
 
         ngx.log(ngx.WARN, "[WAF][XSS]")
         return true
@@ -80,22 +72,14 @@ local function check(value, ctx)
     return false
 end
 
--- ============================================================
--- MAIN
--- ============================================================
-
 function _M.run(ctx)
     ctx.security = ctx.security or {}
 
-    -- ========================================================
-    -- 1. URI
-    -- ========================================================
-    local uri = ngx.var.request_uri
+    -- URI (không include query)
+    local uri = ngx.var.uri
     if check(uri, ctx) then return end
 
-    -- ========================================================
-    -- 2. QUERY PARAMS
-    -- ========================================================
+    -- QUERY
     local args = ngx.req.get_uri_args()
 
     for _, v in pairs(args) do
@@ -108,9 +92,13 @@ function _M.run(ctx)
         end
     end
 
-    -- ========================================================
-    -- 3. BODY (SAFE LIMIT)
-    -- ========================================================
+    -- HEADERS
+    local headers = ngx.req.get_headers()
+
+    if check(headers["user-agent"], ctx) then return end
+    if check(headers["referer"], ctx) then return end
+
+    -- BODY
     local method = ngx.req.get_method()
 
     if method == "POST" or method == "PUT" then
@@ -118,8 +106,18 @@ function _M.run(ctx)
 
         local body = ngx.req.get_body_data()
 
+        if not body then
+            local file = ngx.req.get_body_file()
+            if file then
+                local f = io.open(file, "r")
+                if f then
+                    body = f:read(512 * 1024)
+                    f:close()
+                end
+            end
+        end
+
         if body then
-            -- giới hạn 512KB
             if #body > 512 * 1024 then
                 body = body:sub(1, 512 * 1024)
             end

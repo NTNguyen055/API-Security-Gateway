@@ -1,41 +1,29 @@
 local _M = {}
 
--- ============================================================
--- XFF GUARD — FINAL (STRICT + CORRECT CHAIN VALIDATION)
--- ============================================================
-
 local ngx = ngx
 local math_min = math.min
 
--- ============================================================
--- TRUSTED PROXIES (EXACT MATCH ONLY)
--- ============================================================
+-- giới hạn chain để tránh header abuse
+local MAX_CHAIN = 10
 
-local TRUSTED_PROXIES = {
-    ["127.0.0.1"] = true,
-    ["::1"] = true,
-    ["172.17.0.1"] = true,
-}
-
--- ============================================================
--- SIMPLE IPv4 VALIDATION (FAST)
--- ============================================================
+-- private IP detect (basic)
+local function is_private_ip(ip)
+    return ip:match("^10%.") or
+           ip:match("^192%.168%.") or
+           ip:match("^172%.1[6-9]%.") or
+           ip:match("^172%.2[0-9]%.") or
+           ip:match("^172%.3[0-1]%.")
+end
 
 local function is_valid_ipv4(ip)
     if not ip then return false end
 
-    -- tránh regex nặng → parse thủ công
     local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
     if not a then return false end
 
     a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-
     return a <= 255 and b <= 255 and c <= 255 and d <= 255
 end
-
--- ============================================================
--- PARSE XFF
--- ============================================================
 
 local function parse_xff(xff)
     local ips = {}
@@ -51,14 +39,8 @@ local function parse_xff(xff)
     return ips
 end
 
--- ============================================================
--- MAIN
--- ============================================================
-
 function _M.run(ctx)
-    local real_ip = ngx.var.remote_addr
-    local xff     = ngx.var.http_x_forwarded_for
-
+    local xff = ngx.var.http_x_forwarded_for
     if not xff or xff == "" then
         return
     end
@@ -76,46 +58,37 @@ function _M.run(ctx)
         return
     end
 
-    local spoofed = false
-
     -- ========================================================
-    -- CASE 1: CLIENT (NOT PROXY) SENDING XFF → SPOOF
+    -- TOO MANY HOPS (header abuse / evasion)
     -- ========================================================
-    if not TRUSTED_PROXIES[real_ip] then
-        spoofed = true
-    else
-        -- ====================================================
-        -- CASE 2: VALID PROXY → CHECK CHAIN
-        -- ====================================================
-
-        local last_ip = ips[#ips]
-
-        -- proxy cuối phải match TCP source
-        if last_ip ~= real_ip then
-            spoofed = true
-        end
-    end
-
-    -- ========================================================
-    -- EMIT SIGNAL
-    -- ========================================================
-    if spoofed then
-        ctx.security.xff_spoof = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+    if #ips > MAX_CHAIN then
+        ctx.security.xff_chain_abuse = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
 
         ngx.log(ngx.WARN,
-            "[XFF_GUARD] Spoof | real_ip=", real_ip,
+            "[XFF_GUARD] Chain too long: ", #ips,
             " | xff=", xff
         )
-        return
     end
 
     -- ========================================================
-    -- SANITIZE HEADER (TRUST FIRST IP = CLIENT)
+    -- PRIVATE IP IN CLIENT POSITION (suspicious)
     -- ========================================================
     local client_ip = ips[1]
 
-    ngx.req.set_header("X-Forwarded-For", client_ip)
+    if is_private_ip(client_ip) then
+        ctx.security.xff_private_client = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+
+        ngx.log(ngx.WARN,
+            "[XFF_GUARD] Private IP as client: ", client_ip
+        )
+    end
+
+    -- ========================================================
+    -- SANITIZE HEADER (normalize spacing only)
+    -- ========================================================
+    ngx.req.set_header("X-Forwarded-For", table.concat(ips, ", "))
 end
 
 return _M

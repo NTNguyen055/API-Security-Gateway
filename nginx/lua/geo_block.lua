@@ -1,15 +1,7 @@
 local _M = {}
 
--- ============================================================
--- GEO BLOCK — FINAL (CACHE-FIRST + FAIL-SAFE)
--- ============================================================
-
 local ngx = ngx
 local math_min = math.min
-
--- ============================================================
--- CONFIG
--- ============================================================
 
 local ALLOWED_COUNTRIES = {
     ["VN"] = true,
@@ -18,26 +10,19 @@ local ALLOWED_COUNTRIES = {
     ["JP"] = true,
 }
 
-local GEO_CACHE_TTL = 86400   -- 24h
-local GEO_FAIL_TTL  = 60      -- giảm để retry nhanh hơn
-local GEO_TIMEOUT   = 500     -- ms
-
--- ============================================================
--- FAST PRIVATE IP CHECK (NO REGEX)
--- ============================================================
+local GEO_CACHE_TTL = 86400
+local GEO_FAIL_TTL  = 60
+local GEO_TIMEOUT   = 500
 
 local function is_private_ip(ip)
     if not ip then return false end
 
     return ip == "127.0.0.1"
+        or ip == "::1"
         or ip:sub(1,4) == "10."
         or ip:sub(1,8) == "192.168."
         or ip:match("^172%.(1[6-9]|2[0-9]|3[01])%.")
 end
-
--- ============================================================
--- LOOKUP (HTTP)
--- ============================================================
 
 local function lookup_country(ip)
     local http = require "resty.http"
@@ -47,10 +32,7 @@ local function lookup_country(ip)
 
     local res, err = httpc:request_uri(
         "http://ip-api.com/json/" .. ip .. "?fields=countryCode,status",
-        {
-            method = "GET",
-            keepalive = true
-        }
+        { method = "GET", keepalive = true }
     )
 
     if not res or res.status ~= 200 then
@@ -67,17 +49,11 @@ local function lookup_country(ip)
     return data.countryCode
 end
 
--- ============================================================
--- MAIN
--- ============================================================
-
 function _M.run(ctx)
-    local ip = ngx.var.remote_addr
+    local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
     ctx.security = ctx.security or {}
+    ctx.security.signals = ctx.security.signals or {}
 
-    -- ========================================================
-    -- PRIVATE IP (FAST PATH)
-    -- ========================================================
     if is_private_ip(ip) then
         ctx.security.geo_private = true
         return
@@ -91,24 +67,29 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- CACHE HIT
-    -- ========================================================
     local cached = cache:get(ip)
 
     if cached then
-        if cached == "ALLOW" then
+        if cached == "A" then
             ctx.security.geo_allowed = true
             return
         end
 
-        -- cached country bị block
+        local country = cached:sub(3)
+
         ctx.security.geo_blocked = true
-        ctx.security.geo_country = cached
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+        ctx.security.geo_country = country
+
+        local base = 25
+        if ctx.security.bad_bot_scanner then base = base + 10 end
+        if ctx.security.rate_limit_hard then base = base + 10 end
+
+        ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
+
+        table.insert(ctx.security.signals, "geo_block")
 
         ngx.log(ngx.WARN,
-            "[GEO][CACHE] Block country=", cached,
+            "[GEO][CACHE] Block country=", country,
             " IP=", ip
         )
 
@@ -119,17 +100,23 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- LOOKUP (EXTERNAL)
-    -- ========================================================
+    -- throttle lookup
+    local lock = cache:add("geo_lock:" .. ip, true, 5)
+    if not lock then
+        return
+    end
+
     local country, err = lookup_country(ip)
 
     if not country then
-        -- fail-open + short cache
-        cache:set(ip, "ALLOW", GEO_FAIL_TTL)
+        cache:set(ip, "A", GEO_FAIL_TTL)
 
         ctx.security.geo_lookup_fail = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        local base = 5
+        if ctx.security.rate_limit_hard then base = base + 10 end
+
+        ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
 
         ngx.log(ngx.WARN,
             "[GEO] Lookup failed IP=", ip,
@@ -139,31 +126,27 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- ALLOW
-    -- ========================================================
     if country == "PRIVATE" or ALLOWED_COUNTRIES[country] then
-        cache:set(ip, "ALLOW", GEO_CACHE_TTL)
+        cache:set(ip, "A", GEO_CACHE_TTL)
 
         ctx.security.geo_allowed = true
         ctx.security.geo_country = country
 
-        ngx.log(ngx.INFO,
-            "[GEO] Allow country=", country,
-            " IP=", ip
-        )
-
         return
     end
 
-    -- ========================================================
-    -- BLOCK (SIGNAL ONLY)
-    -- ========================================================
-    cache:set(ip, country, GEO_CACHE_TTL)
+    cache:set(ip, "B:" .. country, GEO_CACHE_TTL)
 
     ctx.security.geo_blocked = true
     ctx.security.geo_country = country
-    ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+
+    local base = 25
+    if ctx.security.bad_bot_scanner then base = base + 10 end
+    if ctx.security.rate_limit_hard then base = base + 10 end
+
+    ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
+
+    table.insert(ctx.security.signals, "geo_block")
 
     ngx.log(ngx.WARN,
         "[GEO] Block country=", country,

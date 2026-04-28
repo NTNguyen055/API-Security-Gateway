@@ -3,24 +3,32 @@ from django.urls import path
 from . import views, adminviews, docviews, userviews
 from django.conf.urls.static import static
 from django.conf import settings
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+# ============================================================
+# HEALTH CHECK (OPTIMIZED FOR GATEWAY + DOCKER + JENKINS)
+# ============================================================
+@csrf_exempt
 def health_check(request):
-    return HttpResponse(status=200)
+    return JsonResponse({"status": "ok"}, status=200)
+
 
 urlpatterns = [
 
-    # =========================
+    # =========================================================
     # PUBLIC (NO JWT)
-    # =========================
+    # =========================================================
     path('login/', views.LOGIN, name='login'),
     path('doLogin/', views.doLogin, name='doLogin'),
-    path('health/', csrf_exempt(health_check)),
 
-    # =========================
+    # 🔥 FIX: đảm bảo match cả /health và /health/
+    path('health/', health_check, name='health'),
+    path('health', health_check),
+
+    # =========================================================
     # BASE / USER
-    # =========================
+    # =========================================================
     path('', userviews.Index, name='index'),
     path('base/', views.BASE, name='base'),
     path('userbase/', userviews.USERBASE, name='userbase'),
@@ -29,16 +37,16 @@ urlpatterns = [
     path('User_SearchAppointment/', userviews.User_Search_Appointments, name='user_search_appointment'),
     path('ViewAppointmentDetails/<str:id>/', userviews.View_Appointment_Details, name='viewappointmentdetails'),
 
-    # =========================
+    # =========================================================
     # PROFILE
-    # =========================
+    # =========================================================
     path('profile/', views.PROFILE, name='profile'),
     path('profile/update/', views.PROFILE_UPDATE, name='profile_update'),
     path('password/', views.CHANGE_PASSWORD, name='change_password'),
 
-    # =========================
+    # =========================================================
     # ADMIN PANEL
-    # =========================
+    # =========================================================
     path('admin/', admin.site.urls),
 
     path('admin/home/', adminviews.ADMINHOME, name='admin_home'),
@@ -59,9 +67,9 @@ urlpatterns = [
     path('admin/website/update/', adminviews.WEBSITE_UPDATE, name='website_update'),
     path('admin/website/update-details/', adminviews.UPDATE_WEBSITE_DETAILS, name='update_website_details'),
 
-    # =========================
+    # =========================================================
     # DOCTOR PANEL
-    # =========================
+    # =========================================================
     path('doctor/signup/', docviews.DOCSIGNUP, name='docsignup'),
     path('doctor/home/', docviews.DOCTORHOME, name='doctor_home'),
 

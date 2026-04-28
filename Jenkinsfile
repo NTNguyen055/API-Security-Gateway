@@ -93,9 +93,8 @@ pipeline {
             steps {
 
                 writeFile file: '/tmp/deploy_script.sh', text: '''#!/bin/bash
-```
 
-set -e
+set -euo pipefail
 
 BASE_DIR="/home/ubuntu/appointment-web"
 APP_DIR="$BASE_DIR/API-Security-Gateway"
@@ -104,68 +103,63 @@ ENV_PATH="$BASE_DIR/.env"
 APP_IMAGE="ntnguyen055/api-security-app"
 GW_IMAGE="ntnguyen055/api-security-gateway"
 
+DOCKER_COMPOSE="docker compose"
+if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker-compose"
+fi
+
 echo "=== DEPLOY START ==="
 
 mkdir -p "$BASE_DIR"
 
-# ================= SYNC CODE =================
-
 echo "[1] SYNC CODE"
 if [ ! -d "$APP_DIR" ]; then
-git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
+    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
 else
-cd "$APP_DIR"
-git fetch origin
-git reset --hard origin/main
-git clean -fd
+    cd "$APP_DIR"
+    git fetch origin
+    git reset --hard origin/main
+    git clean -fd
 fi
 
 cd "$APP_DIR"
 
 if [ ! -f "$ENV_PATH" ]; then
-echo "ERROR: Missing .env"
-exit 1
+    echo "ERROR: Missing .env"
+    exit 1
 fi
-
-# ================= BACKUP =================
 
 echo "[2] BACKUP IMAGE"
 docker image inspect "$APP_IMAGE:latest" >/dev/null 2>&1 && docker tag "$APP_IMAGE:latest" "$APP_IMAGE:backup"
 docker image inspect "$GW_IMAGE:latest"  >/dev/null 2>&1 && docker tag "$GW_IMAGE:latest"  "$GW_IMAGE:backup"
 
-# ================= DEPLOY =================
-
 echo "[3] DEPLOY NEW VERSION"
-docker compose --env-file "$ENV_PATH" pull
-docker compose --env-file "$ENV_PATH" up -d --remove-orphans
+$DOCKER_COMPOSE --env-file "$ENV_PATH" pull
+$DOCKER_COMPOSE --env-file "$ENV_PATH" up -d --remove-orphans
 
-echo "WAIT 15s..."
-sleep 15
-
-# ================= HEALTH CHECK =================
+echo "WAIT 25s..."
+sleep 25
 
 echo "[4] HEALTH CHECK"
 
 HTTP_STATUS="000"
 
 for i in {1..10}; do
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
---max-time 5 \
---connect-timeout 3 \
--A "HealthChecker/1.0" \
--H "Host: dacn3.duckdns.org" \
-http://127.0.0.1/health/ || echo "000")
+    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    --max-time 5 \
+    --connect-timeout 3 \
+    -A "HealthChecker/1.0" \
+    -H "Host: dacn3.duckdns.org" \
+    -H "X-Forwarded-For: 127.0.0.1" \
+    http://127.0.0.1/health/ || echo "000")
 
-```
-echo "Try $i -> $HTTP_STATUS"
+    echo "Try $i -> $HTTP_STATUS"
 
-if [ "$HTTP_STATUS" = "200" ]; then
-    break
-fi
+    if [ "$HTTP_STATUS" = "200" ]; then
+        break
+    fi
 
-sleep 3
-```
-
+    sleep 3
 done
 
 APP_STATUS=$(docker inspect -f "{{.State.Health.Status}}" docapp_django 2>/dev/null || echo "unknown")
@@ -173,29 +167,29 @@ GW_STATUS=$(docker inspect -f "{{.State.Running}}" openresty_gateway 2>/dev/null
 
 echo "APP=$APP_STATUS | GW=$GW_STATUS | HTTP=$HTTP_STATUS"
 
-# ================= ROLLBACK =================
-
 if [ "$APP_STATUS" != "healthy" ] || \
-[ "$GW_STATUS" != "true" ] || \
-[ "$HTTP_STATUS" != "200" ]; then
+   [ "$GW_STATUS" != "true" ] || \
+   [ "$HTTP_STATUS" != "200" ]; then
 
-```
-echo "DEPLOY FAILED -> ROLLBACK"
+    echo "DEPLOY FAILED -> ROLLBACK"
 
-docker compose --env-file "$ENV_PATH" down
+    $DOCKER_COMPOSE --env-file "$ENV_PATH" down
 
-docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest" 2>/dev/null || true
-docker tag "$GW_IMAGE:backup"  "$GW_IMAGE:latest"  2>/dev/null || true
+    docker image inspect "$APP_IMAGE:backup" >/dev/null 2>&1 && \
+    docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest"
 
-docker compose --env-file "$ENV_PATH" up -d
+    docker image inspect "$GW_IMAGE:backup" >/dev/null 2>&1 && \
+    docker tag "$GW_IMAGE:backup" "$GW_IMAGE:latest"
 
-exit 1
-```
+    $DOCKER_COMPOSE --env-file "$ENV_PATH" up -d
 
+    exit 1
 fi
 
 echo "DEPLOY SUCCESS"
+
 docker image prune -f
+docker container prune -f
 
 rm -f /tmp/deploy_script.sh
 '''

@@ -1,26 +1,13 @@
 local _M = {}
 
--- ============================================================
--- DISTRIBUTED RATE LIMIT — FINAL (REDIS + THROTTLE + SAFE)
--- ============================================================
-
 local ngx = ngx
 local tonumber = tonumber
 local math_min = math.min
 
--- ============================================================
--- CONFIG
--- ============================================================
-
 local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
 local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
 
--- throttle Redis calls (giảm spam khi bị flood)
-local LOCAL_THROTTLE_TTL = 1 -- seconds
-
--- ============================================================
--- REDIS SCRIPT (ATOMIC INCR + EXPIRE)
--- ============================================================
+local LOCAL_THROTTLE_TTL = 1
 
 local REDIS_SCRIPT = [[
 local key = KEYS[1]
@@ -33,10 +20,6 @@ end
 
 return current
 ]]
-
--- ============================================================
--- REDIS CONNECT
--- ============================================================
 
 local function get_redis()
     local redis = require "resty.redis"
@@ -52,19 +35,15 @@ local function get_redis()
     return red
 end
 
--- ============================================================
--- MAIN
--- ============================================================
-
 function _M.run(ctx)
-    local ip = ngx.var.remote_addr
+    local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
+    local uri = ngx.var.uri or ""
     ctx.security = ctx.security or {}
+    ctx.security.signals = ctx.security.signals or {}
 
-    -- ========================================================
-    -- LOCAL THROTTLE (ANTI REDIS FLOOD)
-    -- ========================================================
+    -- LOCAL THROTTLE
     local throttle = ngx.shared.rl_cache
-    if throttle then
+    if throttle and (ctx.security.risk or 0) < 30 then
         local hit = throttle:get(ip)
         if hit then
             return
@@ -72,25 +51,24 @@ function _M.run(ctx)
         throttle:set(ip, true, LOCAL_THROTTLE_TTL)
     end
 
-    -- ========================================================
-    -- REDIS CONNECT
-    -- ========================================================
     local red, err = get_redis()
 
     if not red then
         ngx.log(ngx.WARN, "[REDIS_RL] Redis down: ", err)
 
         ctx.security.redis_rl_fail = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
+
+        if ctx.security.rate_limit_hard then
+            ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
+        else
+            ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
+        end
 
         return
     end
 
-    -- ========================================================
-    -- FIXED WINDOW COUNTER
-    -- ========================================================
     local window_id = math.floor(ngx.time() / REDIS_RL_WINDOW)
-    local key = "rrl:" .. ip .. ":" .. window_id
+    local key = "rrl:" .. ip .. ":" .. uri .. ":" .. window_id
 
     local count, script_err = red:eval(
         REDIS_SCRIPT, 1, key, REDIS_RL_WINDOW
@@ -107,22 +85,21 @@ function _M.run(ctx)
         return
     end
 
-    -- ========================================================
-    -- SIGNAL LEVELS
-    -- ========================================================
-
     local limit = REDIS_RATE_LIMIT
 
-    -- 🟢 NORMAL
+    -- NORMAL
     if count <= limit * 0.7 then
         ctx.security.redis_rate_ok = true
+        table.insert(ctx.security.signals, "redis_rate_ok")
         return
     end
 
-    -- 🟡 WARNING
+    -- WARNING
     if count <= limit then
         ctx.security.redis_rate_warn = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        table.insert(ctx.security.signals, "redis_rate_warn")
 
         ngx.log(ngx.WARN,
             "[REDIS_RL] WARN IP=", ip,
@@ -132,9 +109,11 @@ function _M.run(ctx)
         return
     end
 
-    -- 🔴 EXCEEDED
+    -- EXCEEDED
     ctx.security.redis_rate_exceeded = true
-    ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+    ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+
+    table.insert(ctx.security.signals, "redis_rate_exceeded")
 
     ngx.log(ngx.WARN,
         "[REDIS_RL] EXCEEDED IP=", ip,
@@ -144,8 +123,6 @@ function _M.run(ctx)
     if metric_blocked then
         metric_blocked:inc(1, {"redis_rate_limit"})
     end
-
-    -- không block tại đây → để risk_engine quyết định
 end
 
 return _M

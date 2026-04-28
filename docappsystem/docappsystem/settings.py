@@ -8,76 +8,89 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ============================================================
-# LOAD ENV (STRICT)
+# LOAD ENV (DOCKER FIRST)
 # ============================================================
-env_path = Path(__file__).resolve().parent.parent / ".env"
+if os.getenv("USE_DOTENV", "False") == "True":
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
 
-if env_path.exists():
-    load_dotenv(env_path)
-else:
-    print("⚠️ .env not found → fallback to system env")
+
+def get_env(name, default=None, required=False):
+    val = os.getenv(name, default)
+    if required and not val:
+        raise Exception(f"{name} is required")
+    return val
+
 
 # ============================================================
 # CORE SECURITY
 # ============================================================
-SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = get_env("SECRET_KEY", required=True)
 
-if not SECRET_KEY:
-    if os.getenv("DEBUG", "False") == "True":
-        SECRET_KEY = "dev-secret-key"
-    else:
-        raise Exception("SECRET_KEY is required")
+DEBUG = get_env("DEBUG", "False").lower() in ["true", "1", "yes"]
 
-DEBUG = os.environ.get('DEBUG', 'False').lower() in ['true', '1', 'yes']
-
-# ❗ Production guard
 if DEBUG:
-    print("⚠️ WARNING: DEBUG=True (DEV MODE)")
+    import warnings
+    warnings.warn("DEBUG=True is enabled (DEV MODE)")
 else:
-    if os.environ.get('DEBUG', '').lower() == 'true':
+    if get_env("DEBUG", "").lower() == "true":
         raise Exception("DEBUG must be False in production")
+
 
 # ============================================================
 # ALLOWED HOSTS (STRICT)
 # ============================================================
-allowed_hosts_str = os.environ.get('ALLOWED_HOSTS')
-if not allowed_hosts_str:
-    raise Exception("ALLOWED_HOSTS must be set")
+allowed_hosts_str = get_env("ALLOWED_HOSTS", required=True)
 
 ALLOWED_HOSTS = [
     host.strip()
-    for host in allowed_hosts_str.split(',')
+    for host in allowed_hosts_str.split(",")
     if host.strip()
 ]
 
 # ============================================================
 # CSRF / DOMAIN TRUST
 # ============================================================
-CSRF_TRUSTED_ORIGINS = [
-    f"https://{host}" for host in ALLOWED_HOSTS
-] + [
-    f"http://{host}" for host in ALLOWED_HOSTS
-]
+CSRF_TRUSTED_ORIGINS = (
+    [f"https://{host}" for host in ALLOWED_HOSTS] +
+    [f"http://{host}" for host in ALLOWED_HOSTS]
+)
+
+CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = "Lax"
 
 # ============================================================
-# PROXY (OpenResty / Nginx)
+# SESSION SECURITY
+# ============================================================
+SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_AGE = 3600
+SESSION_SAVE_EVERY_REQUEST = True
+
+# ============================================================
+# PROXY (OPENRESTY)
 # ============================================================
 USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # ============================================================
-# SECURITY HEADERS (CRITICAL)
+# SECURITY HEADERS
 # ============================================================
 SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
 
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = 'DENY'
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
+X_FRAME_OPTIONS = "DENY"
 
 # ============================================================
 # APPLICATION
@@ -96,7 +109,10 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+
+    # CSRF vẫn giữ (Gateway không thay thế cái này)
     'django.middleware.csrf.CsrfViewMiddleware',
+
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -123,19 +139,20 @@ TEMPLATES = [
 WSGI_APPLICATION = 'docappsystem.wsgi.application'
 
 # ============================================================
-# DATABASE (RDS HARDENING)
+# DATABASE (RDS HARDENED)
 # ============================================================
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_USER'),
-        'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': os.environ.get('DB_HOST'),
-        'PORT': os.environ.get('DB_PORT', '3306'),
+        'NAME': get_env('DB_NAME', required=True),
+        'USER': get_env('DB_USER', required=True),
+        'PASSWORD': get_env('DB_PASSWORD', required=True),
+        'HOST': get_env('DB_HOST', required=True),
+        'PORT': get_env('DB_PORT', '3306'),
         'CONN_MAX_AGE': 60,
         'OPTIONS': {
             'charset': 'utf8mb4',
+            'connect_timeout': 5,
         }
     }
 }
@@ -159,11 +176,13 @@ USE_I18N = True
 USE_TZ = True
 
 # ============================================================
-# STATIC & MEDIA (DEFAULT LOCAL)
+# STATIC & MEDIA
 # ============================================================
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
+
+STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -175,34 +194,32 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'dasapp.CustomUser'
 
 # ============================================================
-# REDIS CACHE (HARDENED)
+# REDIS CACHE (STABLE)
 # ============================================================
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL", "redis://redis:6379/1"),
+        "LOCATION": get_env("REDIS_URL", "redis://redis:6379/1"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             "SOCKET_CONNECT_TIMEOUT": 5,
             "SOCKET_TIMEOUT": 5,
+            "RETRY_ON_TIMEOUT": True,
         }
     }
 }
 
 # ============================================================
-# AWS S3 STORAGE (IAM ROLE)
+# AWS S3 (OPTIONAL)
 # ============================================================
-USE_S3 = os.environ.get('USE_S3', 'False') == 'True'
-
-AWS_DEFAULT_ACL = None
-AWS_QUERYSTRING_AUTH = False
+USE_S3 = get_env('USE_S3', 'False') == 'True'
 
 if USE_S3:
-    AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME')
-    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-northeast-1')
+    AWS_STORAGE_BUCKET_NAME = get_env('AWS_STORAGE_BUCKET_NAME', required=True)
+    AWS_S3_REGION_NAME = get_env('AWS_S3_REGION_NAME', 'ap-northeast-1')
 
-    if not AWS_STORAGE_BUCKET_NAME:
-        raise Exception("AWS_STORAGE_BUCKET_NAME is required")
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
 
     AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com'
 
@@ -224,3 +241,26 @@ if USE_S3:
 
     STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
     MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
+
+# ============================================================
+# LOGGING (CRITICAL FOR DEBUG)
+# ============================================================
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {
+            'format': '[%(asctime)s] %(levelname)s %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
