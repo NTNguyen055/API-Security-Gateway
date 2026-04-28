@@ -36,11 +36,11 @@ ENV PYTHONOPTIMIZE=1
 
 # Runtime deps 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libmariadb3 \
+    build-essential \
     libmariadb-dev \
     libmariadb-dev-compat \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
