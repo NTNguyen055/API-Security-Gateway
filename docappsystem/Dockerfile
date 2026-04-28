@@ -34,10 +34,11 @@ ENV PIP_ROOT_USER_ACTION=ignore
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONOPTIMIZE=1
 
-# Runtime deps (nhẹ)
+# Runtime deps 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb3 \
-    libmysqlclient-dev \
+    libmariadb-dev \
+    libmariadb-dev-compat \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
