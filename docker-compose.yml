@@ -14,14 +14,21 @@ services:
       - /home/ubuntu/appointment-web/.env
 
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy   
 
+    command: >
+      sh -c "
+      python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
+      gunicorn docappsystem.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60
+      " 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s   
 
     networks:
       - internal

@@ -50,9 +50,6 @@ RUN pip install --no-cache-dir /wheels/* \
 
 COPY . .
 
-# ================= STATIC =================
-RUN python manage.py collectstatic --noinput || true
-
 # ================= SECURITY =================
 RUN useradd -m appuser
 USER appuser

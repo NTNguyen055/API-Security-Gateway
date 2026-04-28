@@ -20,9 +20,13 @@ else:
 # ============================================================
 # CORE SECURITY
 # ============================================================
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.getenv("SECRET_KEY")
+
 if not SECRET_KEY:
-    raise Exception("SECRET_KEY is required")
+    if os.getenv("DEBUG", "False") == "True":
+        SECRET_KEY = "dev-secret-key"
+    else:
+        raise Exception("SECRET_KEY is required")
 
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ['true', '1', 'yes']
 
