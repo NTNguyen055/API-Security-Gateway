@@ -10,11 +10,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ============================================================
 # LOAD ENV (STRICT)
 # ============================================================
-env_path = os.path.join(BASE_DIR, '.env')
-if os.path.exists(env_path):
+env_path = Path(__file__).resolve().parent.parent / ".env"
+
+if env_path.exists():
     load_dotenv(env_path)
 else:
-    raise Exception(".env file not found")
+    print("⚠️ .env not found → fallback to system env")
 
 # ============================================================
 # CORE SECURITY
