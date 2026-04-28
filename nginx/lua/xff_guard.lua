@@ -1,86 +1,121 @@
 local _M = {}
 
---[[
-    XFF SPOOFING GUARD
-    -------------------
-    Phát hiện kẻ tấn công cố tình giả mạo X-Forwarded-For header
-    để bypass IP blacklist hoặc rate-limit.
+-- ============================================================
+-- XFF GUARD — FINAL (STRICT + CORRECT CHAIN VALIDATION)
+-- ============================================================
 
-    Nguyên tắc:
-    - remote_addr = IP thật của TCP connection (không thể giả)
-    - X-Forwarded-For = header do client tự gửi (có thể giả)
+local ngx = ngx
+local math_min = math.min
 
-    Nếu XFF[1] (IP đầu tiên, "nguồn gốc") KHÁC remote_addr
-    mà remote_addr KHÔNG phải trusted proxy → đây là spoofing attempt.
+-- ============================================================
+-- TRUSTED PROXIES (EXACT MATCH ONLY)
+-- ============================================================
 
-    Hệ thống này chạy sau reverse proxy (OpenResty là proxy cuối),
-    nên remote_addr luôn là IP thật của client.
-]]
-
--- Danh sách trusted proxy được phép set XFF hợp lệ
--- (AWS ALB, CloudFront, hoặc load balancer nội bộ)
 local TRUSTED_PROXIES = {
-    ["127.0.0.1"]   = true,  -- localhost
-    ["172.17.0.1"]  = true,  -- Docker bridge gateway
-    ["172.18.0.1"]  = true,  -- Docker network gateway
-    ["10.0.0.1"]    = true,  -- AWS internal (thêm nếu dùng ALB)
+    ["127.0.0.1"] = true,
+    ["::1"] = true,
+    ["172.17.0.1"] = true,
 }
 
--- Kiểm tra IP có phải dải private không
-local function is_private_ip(ip)
-    return ngx.re.find(ip,
-        [[^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)]],
-        "jo") ~= nil
+-- ============================================================
+-- SIMPLE IPv4 VALIDATION (FAST)
+-- ============================================================
+
+local function is_valid_ipv4(ip)
+    if not ip then return false end
+
+    -- tránh regex nặng → parse thủ công
+    local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+    if not a then return false end
+
+    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+
+    return a <= 255 and b <= 255 and c <= 255 and d <= 255
 end
 
-function _M.run()
+-- ============================================================
+-- PARSE XFF
+-- ============================================================
+
+local function parse_xff(xff)
+    local ips = {}
+
+    for ip in xff:gmatch("([^,]+)") do
+        ip = ip:gsub("^%s*(.-)%s*$", "%1")
+
+        if is_valid_ipv4(ip) then
+            ips[#ips + 1] = ip
+        end
+    end
+
+    return ips
+end
+
+-- ============================================================
+-- MAIN
+-- ============================================================
+
+function _M.run(ctx)
     local real_ip = ngx.var.remote_addr
     local xff     = ngx.var.http_x_forwarded_for
 
-    -- Không có XFF header → bình thường, bỏ qua
     if not xff or xff == "" then
-        return nil
+        return
     end
 
-    -- Lấy IP đầu tiên trong chuỗi XFF (IP "nguồn gốc" mà client khai)
-    local claimed_ip = xff:match("^%s*([^,]+)%s*")
-    if not claimed_ip then
-        return nil
-    end
-    claimed_ip = claimed_ip:gsub("%s+", "")
+    ctx.security = ctx.security or {}
 
-    -- Nếu real_ip là trusted proxy → XFF hợp lệ, bỏ qua
-    if TRUSTED_PROXIES[real_ip] then
-        return nil
-    end
+    local ips = parse_xff(xff)
 
-    -- Nếu real_ip là IP private (Docker internal) → bỏ qua
-    if is_private_ip(real_ip) then
-        return nil
+    -- ========================================================
+    -- MALFORMED HEADER
+    -- ========================================================
+    if #ips == 0 then
+        ctx.security.xff_malformed = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+        return
     end
 
-    -- ⚡ DETECT: real_ip KHÁC claimed_ip → client đang tự set XFF giả
-    if real_ip ~= claimed_ip then
-        ngx.log(ngx.WARN,
-            "[XFF_GUARD] Spoofing detected! ",
-            "real_ip=", real_ip,
-            " claimed_xff=", claimed_ip,
-            " full_xff=", xff
-        )
+    local spoofed = false
 
-        if metric_blocked then
-            metric_blocked:inc(1, {"xff_spoof"})
+    -- ========================================================
+    -- CASE 1: CLIENT (NOT PROXY) SENDING XFF → SPOOF
+    -- ========================================================
+    if not TRUSTED_PROXIES[real_ip] then
+        spoofed = true
+    else
+        -- ====================================================
+        -- CASE 2: VALID PROXY → CHECK CHAIN
+        -- ====================================================
+
+        local last_ip = ips[#ips]
+
+        -- proxy cuối phải match TCP source
+        if last_ip ~= real_ip then
+            spoofed = true
         end
-
-        -- Xóa XFF header giả, thay bằng IP thật để downstream không bị lừa
-        ngx.req.set_header("X-Forwarded-For", real_ip)
-        ngx.req.set_header("X-Real-IP", real_ip)
-
-        -- Trả về 403: hành vi giả mạo header là dấu hiệu tấn công rõ ràng
-        return 403
     end
 
-    return nil
+    -- ========================================================
+    -- EMIT SIGNAL
+    -- ========================================================
+    if spoofed then
+        ctx.security.xff_spoof = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+
+        ngx.log(ngx.WARN,
+            "[XFF_GUARD] Spoof | real_ip=", real_ip,
+            " | xff=", xff
+        )
+        return
+    end
+
+    -- ========================================================
+    -- SANITIZE HEADER (TRUST FIRST IP = CLIENT)
+    -- ========================================================
+    local client_ip = ips[1]
+
+    ngx.req.set_header("X-Forwarded-For", client_ip)
 end
 
 return _M

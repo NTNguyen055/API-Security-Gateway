@@ -1,106 +1,132 @@
 local _M = {}
 
--- SQLi patterns (SAFE VERSION - giảm false positive)
-local sqli_pattern = [[
-(\bunion\s+select\b)|
-(\bselect\b.+\bfrom\b.+\bwhere\b)|
-(\binsert\s+into\b)|
-(\bdelete\s+from\b)|
-(\bdrop\s+table\b)|
-(\bupdate\b.+\bset\b)
+-- ============================================================
+-- WAF SQLi + XSS — FINAL (FAST + LOW OVERHEAD)
+-- ============================================================
+
+local ngx = ngx
+local re_find = ngx.re.find
+local math_min = math.min
+
+-- ============================================================
+-- PATTERNS (OPTIMIZED)
+-- ============================================================
+
+local SQLI_PATTERN = [[
+\bunion\b.{0,10}\bselect\b|
+\bselect\b.{0,20}\bfrom\b|
+\b(insert|delete|drop|update)\b.{0,10}\b(into|from|table|set)\b|
+\bor\b\s+1=1|
+(--|#|/\*)
 ]]
 
--- XSS patterns (giữ nguyên nhưng tối ưu nhẹ)
-local xss_pattern = [[
-(<script\b)|
-(javascript\s*:)|
-(onerror\s*=)|
-(onload\s*=)|
-(<svg\b)|
-(<img\b.*onerror)
+local XSS_PATTERN = [[
+<\s*script\b|
+javascript\s*:|
+onerror\s*=|
+onload\s*=|
+<\s*svg\b|
+<\s*img\b[^>]*onerror|
+document\.cookie|
+<iframe\b
 ]]
+
+-- ============================================================
+-- NORMALIZE (LIGHTWEIGHT)
+-- ============================================================
 
 local function normalize(input)
     if not input then return "" end
+
+    -- decode tối đa 2 lần (anti double encode)
     input = ngx.unescape_uri(input)
-    return string.lower(input)
+    input = ngx.unescape_uri(input)
+
+    input = input:lower()
+
+    -- remove SQL comments (nhẹ hơn)
+    input = input:gsub("/%*.-%*/", "")
+
+    return input
 end
 
-local function check(value, ip)
+-- ============================================================
+-- CHECK (EARLY EXIT)
+-- ============================================================
+
+local function check(value, ctx)
+    if not value then return false end
+
     local v = normalize(value)
 
-    -- SQLi check
-    if ngx.re.find(v, sqli_pattern, "jo") then
-        ngx.log(ngx.WARN, "[WAF][SQLi] Blocked IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"waf_sqli"}) end
-        return 403
+    -- SQLi
+    if re_find(v, SQLI_PATTERN, "ijo") then
+        ctx.security.waf_sqli = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 40, 100)
+
+        ngx.log(ngx.WARN, "[WAF][SQLi]")
+        return true
     end
 
-    -- XSS check
-    if ngx.re.find(v, xss_pattern, "jo") then
-        ngx.log(ngx.WARN, "[WAF][XSS] Blocked IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"waf_xss"}) end
-        return 403
+    -- XSS
+    if re_find(v, XSS_PATTERN, "ijo") then
+        ctx.security.waf_xss = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+
+        ngx.log(ngx.WARN, "[WAF][XSS]")
+        return true
     end
 
-    return nil
+    return false
 end
 
-function _M.run()
-    local ip = ngx.var.remote_addr
+-- ============================================================
+-- MAIN
+-- ============================================================
 
+function _M.run(ctx)
+    ctx.security = ctx.security or {}
+
+    -- ========================================================
     -- 1. URI
+    -- ========================================================
     local uri = ngx.var.request_uri
-    local code = check(uri, ip)
-    if code then return code end
+    if check(uri, ctx) then return end
 
-    -- 2. Query args
+    -- ========================================================
+    -- 2. QUERY PARAMS
+    -- ========================================================
     local args = ngx.req.get_uri_args()
+
     for _, v in pairs(args) do
         if type(v) == "table" then
             for _, vv in ipairs(v) do
-                local code = check(vv, ip)
-                if code then return code end
+                if check(vv, ctx) then return end
             end
         else
-            local code = check(v, ip)
-            if code then return code end
+            if check(v, ctx) then return end
         end
     end
 
-    -- 3. Body (POST / PUT)
+    -- ========================================================
+    -- 3. BODY (SAFE LIMIT)
+    -- ========================================================
     local method = ngx.req.get_method()
+
     if method == "POST" or method == "PUT" then
         ngx.req.read_body()
 
-        -- ✅ FIX: get_body_data() trả nil khi body > client_body_buffer_size (mặc định 8KB,
-        -- đã nâng lên 256KB trong nginx.conf). Khi vượt ngưỡng, Nginx lưu body vào file tạm.
-        -- Phải dùng get_body_file() để đọc tiếp, tránh WAF bỏ qua kiểm tra body lớn.
         local body = ngx.req.get_body_data()
 
-        if not body then
-            -- Body được lưu vào file tạm → đọc file
-            local body_file = ngx.req.get_body_file()
-            if body_file then
-                local f, err = io.open(body_file, "r")
-                if f then
-                    -- Chỉ đọc tối đa 512KB để tránh scan quá tốn CPU
-                    -- Attacker hiếm khi nhét payload > 512KB vì dễ bị timeout
-                    body = f:read(512 * 1024)
-                    f:close()
-                else
-                    ngx.log(ngx.WARN, "[WAF] Cannot read body file: ", err, " IP: ", ip)
-                end
-            end
-        end
-
         if body then
-            local code = check(body, ip)
-            if code then return code end
+            -- giới hạn 512KB
+            if #body > 512 * 1024 then
+                body = body:sub(1, 512 * 1024)
+            end
+
+            check(body, ctx)
         end
     end
-
-    return nil
 end
 
 return _M

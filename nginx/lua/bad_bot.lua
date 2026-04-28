@@ -1,55 +1,140 @@
 local _M = {}
 
--- ✅ NOTE về Regex flags:
--- Flag "j"  = PCRE mode (bật JIT compiler của LuaJIT, tốc độ nhanh hơn ~5-10x)
--- Flag "o"  = compile pattern 1 lần duy nhất, cache lại (không recompile mỗi request)
--- Flag "jo" = kết hợp cả hai → BẮT BUỘC dùng "jo" ở đây vì:
---   (1) \b (word boundary) là cú pháp PCRE, KHÔNG phải Lua standard pattern
---   (2) Nếu dùng flag "" (không có "j"), \b sẽ không được nhận diện → match sai
--- Tất cả ngx.re.find/match trong file này đều phải dùng "jo".
+-- ============================================================
+-- BAD BOT DETECTION — FINAL (LOW OVERHEAD + ADAPTIVE)
+-- ============================================================
 
--- Tier 1 — Scanner độc hại: block ngay 403
--- \b đảm bảo không false-positive: "curl" trong "scurl" sẽ không bị match
-local scanner_pattern = [[\b(sqlmap|nikto|nmap|zgrab|masscan|nuclei|dirbuster|gobuster)\b]]
+local ngx = ngx
+local math_min = math.min
 
--- Tier 2 — Dev tools hợp lệ: allow nhưng log để audit
-local dev_pattern     = [[\b(curl|wget|python-requests|postmanruntime|insomnia|httpie)\b]]
+-- ============================================================
+-- PATTERNS (LOW-COST STRING MATCH FIRST)
+-- ============================================================
 
-function _M.run()
+-- dùng table thay vì regex cho fast-path
+local SCANNERS = {
+    "sqlmap", "nikto", "nmap", "zgrab", "masscan", "nuclei", "dirbuster", "gobuster"
+}
+
+local HEADLESS = {
+    "headless", "phantomjs", "selenium", "puppeteer", "playwright"
+}
+
+local DEV_TOOLS = {
+    "curl", "wget", "python-requests", "postmanruntime", "insomnia", "httpie"
+}
+
+-- ============================================================
+-- FAST MATCH (NO REGEX)
+-- ============================================================
+
+local function contains_any(str, patterns)
+    for i = 1, #patterns do
+        if str:find(patterns[i], 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- ============================================================
+-- MAIN
+-- ============================================================
+
+function _M.run(ctx)
     local ip = ngx.var.remote_addr
-
-    -- Đọc UA trước khi or "" để check nil/empty đúng
     local ua = ngx.var.http_user_agent
 
-    -- Tier 3: UA rỗng hoặc nil → 403
-    -- Phải check TRƯỚC khi gán or "" vì sau đó ua luôn là string
+    ctx.security = ctx.security or {}
+
+    -- ========================================================
+    -- EMPTY UA
+    -- ========================================================
     if not ua or ua == "" then
-        ngx.log(ngx.WARN, "[BAD_BOT] Empty UA IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"empty_ua"}) end
-        return 403
+        ctx.security.empty_ua = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+
+        ngx.log(ngx.WARN, "[BAD_BOT] Empty UA IP=", ip)
+
+        if metric_blocked then
+            metric_blocked:inc(1, {"empty_ua"})
+        end
+
+        return
     end
 
-    -- Whitelist health check — sau khi đã confirm UA không rỗng
+    -- ========================================================
+    -- FAST PATH: NORMAL BROWSER CHECK
+    -- ========================================================
+    -- tránh check nặng nếu là browser phổ biến
+    if ua:find("Mozilla", 1, true) then
+        ctx.security.ua_normal = true
+        return
+    end
+
+    -- ========================================================
+    -- HEALTH CHECK
+    -- ========================================================
     if ua:find("HealthChecker", 1, true) then
-        return nil
+        ctx.security.healthcheck = true
+        return
     end
 
     local ua_lower = ua:lower()
 
-    -- Tier 1: scanner độc hại → 403
-    if ngx.re.find(ua_lower, scanner_pattern, "jo") then
-        ngx.log(ngx.WARN, "[BAD_BOT] Scanner blocked: ", ua, " IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"bad_bot"}) end
-        return 403
+    -- ========================================================
+    -- SCANNER (HIGH RISK)
+    -- ========================================================
+    if contains_any(ua_lower, SCANNERS) then
+        ctx.security.bad_bot_scanner = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 50, 100)
+
+        ngx.log(ngx.WARN,
+            "[BAD_BOT] Scanner UA=", ua,
+            " IP=", ip
+        )
+
+        if metric_blocked then
+            metric_blocked:inc(1, {"bad_bot_scanner"})
+        end
+
+        return
     end
 
-    -- Tier 2: dev tools → allow + log (curl, Postman, wget...)
-    if ngx.re.find(ua_lower, dev_pattern, "jo") then
-        ngx.log(ngx.INFO, "[BAD_BOT] Dev tool allowed: ", ua, " IP: ", ip)
-        return nil
+    -- ========================================================
+    -- HEADLESS (STEALTH BOT)
+    -- ========================================================
+    if contains_any(ua_lower, HEADLESS) then
+        ctx.security.bad_bot_headless = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+
+        ngx.log(ngx.WARN,
+            "[BAD_BOT] Headless UA=", ua,
+            " IP=", ip
+        )
+
+        return
     end
 
-    return nil
+    -- ========================================================
+    -- DEV TOOLS (LOW RISK)
+    -- ========================================================
+    if contains_any(ua_lower, DEV_TOOLS) then
+        ctx.security.dev_tool = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        ngx.log(ngx.INFO,
+            "[BAD_BOT] DevTool UA=", ua,
+            " IP=", ip
+        )
+
+        return
+    end
+
+    -- ========================================================
+    -- DEFAULT
+    -- ========================================================
+    ctx.security.ua_unknown = true
 end
 
 return _M

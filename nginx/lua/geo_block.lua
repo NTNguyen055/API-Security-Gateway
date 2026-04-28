@@ -1,100 +1,177 @@
 local _M = {}
 
---[[
-    GEO-BLOCKING MODULE
-    Dùng ip-api.com (free, không cần API key) để lookup quốc gia.
-    Kết quả cache vào shared memory 24h để tránh gọi API lặp lại.
+-- ============================================================
+-- GEO BLOCK — FINAL (CACHE-FIRST + FAIL-SAFE)
+-- ============================================================
 
-    Chiến lược: WHITELIST — chỉ cho phép các quốc gia trong danh sách.
-    Phù hợp với ứng dụng nội địa (Việt Nam + các nước cho phép).
-]]
+local ngx = ngx
+local math_min = math.min
 
--- ✅ Danh sách quốc gia được phép truy cập (ISO 3166-1 alpha-2)
+-- ============================================================
+-- CONFIG
+-- ============================================================
+
 local ALLOWED_COUNTRIES = {
-    ["VN"] = true,  -- Việt Nam
-    ["US"] = true,  -- Mỹ (AWS infrastructure)
-    ["SG"] = true,  -- Singapore (AWS ap-southeast-1)
-    ["JP"] = true,  -- Nhật (AWS ap-northeast-1 — region của RDS)
+    ["VN"] = true,
+    ["US"] = true,
+    ["SG"] = true,
+    ["JP"] = true,
 }
 
--- Cache 24 tiếng để giảm tải API
-local GEO_CACHE_TTL = 86400
+local GEO_CACHE_TTL = 86400   -- 24h
+local GEO_FAIL_TTL  = 60      -- giảm để retry nhanh hơn
+local GEO_TIMEOUT   = 500     -- ms
+
+-- ============================================================
+-- FAST PRIVATE IP CHECK (NO REGEX)
+-- ============================================================
+
+local function is_private_ip(ip)
+    if not ip then return false end
+
+    return ip == "127.0.0.1"
+        or ip:sub(1,4) == "10."
+        or ip:sub(1,8) == "192.168."
+        or ip:match("^172%.(1[6-9]|2[0-9]|3[01])%.")
+end
+
+-- ============================================================
+-- LOOKUP (HTTP)
+-- ============================================================
 
 local function lookup_country(ip)
     local http = require "resty.http"
     local httpc = http.new()
-    httpc:set_timeout(1000)  -- 1 giây timeout
+
+    httpc:set_timeout(GEO_TIMEOUT)
 
     local res, err = httpc:request_uri(
         "http://ip-api.com/json/" .. ip .. "?fields=countryCode,status",
-        { method = "GET" }
+        {
+            method = "GET",
+            keepalive = true
+        }
     )
 
     if not res or res.status ~= 200 then
-        ngx.log(ngx.ERR, "[GEO] API error for IP: ", ip, " err=", err)
-        return nil
+        return nil, err
     end
 
     local cjson = require "cjson.safe"
-    local data, decode_err = cjson.decode(res.body)
-    if not data or decode_err then
-        ngx.log(ngx.ERR, "[GEO] JSON decode error: ", decode_err)
-        return nil
-    end
+    local data = cjson.decode(res.body)
 
-    if data.status ~= "success" then
-        -- IP private/reserved → allow
+    if not data or data.status ~= "success" then
         return "PRIVATE"
     end
 
     return data.countryCode
 end
 
-function _M.run()
-    local ip = ngx.var.remote_addr
+-- ============================================================
+-- MAIN
+-- ============================================================
 
-    -- Bỏ qua IP private (localhost, Docker network, AWS internal)
-    if ip == "127.0.0.1" or
-       ngx.re.find(ip, [[^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)]], "jo") then
-        return nil
+function _M.run(ctx)
+    local ip = ngx.var.remote_addr
+    ctx.security = ctx.security or {}
+
+    -- ========================================================
+    -- PRIVATE IP (FAST PATH)
+    -- ========================================================
+    if is_private_ip(ip) then
+        ctx.security.geo_private = true
+        return
     end
 
     local cache = ngx.shared.geo_cache
+
     if not cache then
-        ngx.log(ngx.ERR, "[GEO] Missing shared dict 'geo_cache' in nginx.conf")
-        return nil  -- fail-open
+        ctx.security.geo_cache_missing = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
+        return
     end
 
-    -- L1: Kiểm tra cache trước
+    -- ========================================================
+    -- CACHE HIT
+    -- ========================================================
     local cached = cache:get(ip)
+
     if cached then
-        if cached == "ALLOW" or cached == "PRIVATE" then
-            return nil
+        if cached == "ALLOW" then
+            ctx.security.geo_allowed = true
+            return
         end
-        ngx.log(ngx.WARN, "[GEO][CACHE] Blocked country=", cached, " IP=", ip)
-        if metric_blocked then metric_blocked:inc(1, {"geo_block"}) end
-        return 403
+
+        -- cached country bị block
+        ctx.security.geo_blocked = true
+        ctx.security.geo_country = cached
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+
+        ngx.log(ngx.WARN,
+            "[GEO][CACHE] Block country=", cached,
+            " IP=", ip
+        )
+
+        if metric_blocked then
+            metric_blocked:inc(1, {"geo_block"})
+        end
+
+        return
     end
 
-    -- L2: Gọi API lookup (non-blocking vì dùng lua-resty-http)
-    local country = lookup_country(ip)
+    -- ========================================================
+    -- LOOKUP (EXTERNAL)
+    -- ========================================================
+    local country, err = lookup_country(ip)
 
     if not country then
-        -- API lỗi → fail-open, cache ngắn để retry sau
-        cache:set(ip, "ALLOW", 300)
-        return nil
+        -- fail-open + short cache
+        cache:set(ip, "ALLOW", GEO_FAIL_TTL)
+
+        ctx.security.geo_lookup_fail = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        ngx.log(ngx.WARN,
+            "[GEO] Lookup failed IP=", ip,
+            " err=", err
+        )
+
+        return
     end
 
-    -- Lưu cache
+    -- ========================================================
+    -- ALLOW
+    -- ========================================================
     if country == "PRIVATE" or ALLOWED_COUNTRIES[country] then
         cache:set(ip, "ALLOW", GEO_CACHE_TTL)
-        ngx.log(ngx.INFO, "[GEO] Allowed country=", country, " IP=", ip)
-        return nil
-    else
-        cache:set(ip, country, GEO_CACHE_TTL)
-        ngx.log(ngx.WARN, "[GEO] Blocked country=", country, " IP=", ip)
-        if metric_blocked then metric_blocked:inc(1, {"geo_block"}) end
-        return 403
+
+        ctx.security.geo_allowed = true
+        ctx.security.geo_country = country
+
+        ngx.log(ngx.INFO,
+            "[GEO] Allow country=", country,
+            " IP=", ip
+        )
+
+        return
+    end
+
+    -- ========================================================
+    -- BLOCK (SIGNAL ONLY)
+    -- ========================================================
+    cache:set(ip, country, GEO_CACHE_TTL)
+
+    ctx.security.geo_blocked = true
+    ctx.security.geo_country = country
+    ctx.security.risk = math_min((ctx.security.risk or 0) + 35, 100)
+
+    ngx.log(ngx.WARN,
+        "[GEO] Block country=", country,
+        " IP=", ip
+    )
+
+    if metric_blocked then
+        metric_blocked:inc(1, {"geo_block"})
     end
 end
 

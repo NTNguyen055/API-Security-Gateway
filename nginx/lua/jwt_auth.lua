@@ -1,14 +1,32 @@
 local _M = {}
 
+-- ============================================================
+-- JWT AUTH — FINAL (SECURE + OPTIMIZED)
+-- ============================================================
+
 local jwt = require "resty.jwt"
 local sha256 = require "resty.sha256"
 local str = require "resty.string"
 
+local ngx = ngx
+local re_match = ngx.re.match
+local math_min = math.min
+
 local JWT_SECRET = os.getenv("JWT_SECRET_KEY")
 
-if not JWT_SECRET or JWT_SECRET == "" then
-    ngx.log(ngx.ERR, "[JWT] Missing JWT_SECRET_KEY → skip")
-end
+-- ============================================================
+-- PUBLIC ENDPOINTS (FIXED)
+-- ============================================================
+
+local PUBLIC_PATHS = {
+    ["/login/"]   = true,
+    ["/doLogin/"] = true,
+    ["/health/"]  = true
+}
+
+-- ============================================================
+-- HASH TOKEN
+-- ============================================================
 
 local function hash_token(token)
     local sha = sha256:new()
@@ -16,76 +34,167 @@ local function hash_token(token)
     return str.to_hex(sha:final())
 end
 
-function _M.run()
-    if not JWT_SECRET then
-        return nil
+-- ============================================================
+-- MAIN
+-- ============================================================
+
+function _M.run(ctx)
+    if not JWT_SECRET or JWT_SECRET == "" then
+        return
     end
 
     local uri = ngx.var.uri
 
-    if not ngx.re.find(uri, "^/api/", "jo") then
-        return nil
+    -- ========================================================
+    -- SKIP PUBLIC PATH
+    -- ========================================================
+    if PUBLIC_PATHS[uri] then
+        return
     end
 
     local ip = ngx.var.remote_addr
-
     local auth_header = ngx.var.http_authorization
+
+    ctx.security = ctx.security or {}
+
+    -- ========================================================
+    -- MISSING TOKEN
+    -- ========================================================
     if not auth_header then
-        ngx.log(ngx.WARN, "[JWT] Missing Authorization IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"jwt_missing"}) end
-        return 401
+        ctx.security.jwt_missing = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        ngx.log(ngx.WARN, "[JWT] Missing IP=", ip)
+        return
     end
 
-    local m = ngx.re.match(auth_header, [[^Bearer\s+([A-Za-z0-9\-\._~\+\/]+=*)$]], "jo")
+    -- ========================================================
+    -- STRICT FORMAT CHECK
+    -- ========================================================
+    local m = re_match(auth_header,
+        [[^Bearer\s+([A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)$]],
+        "jo"
+    )
+
     if not m then
-        return 401
+        ctx.security.jwt_malformed = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+        return
     end
 
     local token = m[1]
     local token_hash = hash_token(token)
 
-    -- L1: cache
     local cache = ngx.shared.jwt_cache
-    if cache:get(token_hash) then
-        return nil
+
+    -- ========================================================
+    -- CACHE HIT (VALID TOKEN)
+    -- ========================================================
+    if cache and cache:get(token_hash) then
+        return
     end
 
+    -- ========================================================
+    -- VERIFY SIGNATURE
+    -- ========================================================
     local jwt_obj = jwt:verify(JWT_SECRET, token)
 
     if not jwt_obj.verified then
-        ngx.log(ngx.WARN, "[JWT] Invalid token: ", jwt_obj.reason, " IP: ", ip)
-        if metric_blocked then metric_blocked:inc(1, {"jwt_invalid"}) end
-        return 401
+        ctx.security.jwt_invalid = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 40, 100)
+
+        ngx.log(ngx.WARN,
+            "[JWT] Invalid IP=", ip,
+            " reason=", jwt_obj.reason
+        )
+        return
     end
 
-    -- 🔥 check alg
+    -- ========================================================
+    -- ALG CHECK
+    -- ========================================================
     if jwt_obj.header.alg ~= "HS256" then
-        return 401
+        ctx.security.jwt_alg_attack = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 50, 100)
+        return
     end
 
     local payload = jwt_obj.payload
+    local now = ngx.time()
 
+    -- ========================================================
+    -- PAYLOAD VALIDATION
+    -- ========================================================
     if not payload or type(payload.user_id) ~= "number" then
-        return 401
+        ctx.security.jwt_payload_invalid = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+        return
     end
 
-    -- 🔥 exp check chuẩn
-    if not payload.exp or payload.exp < ngx.time() then
-        return 401
+    -- ========================================================
+    -- EXP CHECK
+    -- ========================================================
+    if not payload.exp then
+        ctx.security.jwt_no_exp = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+        return
     end
 
-    -- 🔥 optional issuer check
-    -- if payload.iss ~= "docapp" then return 401 end
+    if payload.exp < now then
+        ctx.security.jwt_expired = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
+        return
+    end
 
-    local ttl = payload.exp - ngx.time()
-    if ttl > 0 then
+    -- ========================================================
+    -- NBF CHECK (NEW - FIX)
+    -- ========================================================
+    if payload.nbf and payload.nbf > now then
+        ctx.security.jwt_nbf = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+
+        ngx.log(ngx.WARN, "[JWT] Not yet valid IP=", ip)
+        return
+    end
+
+    -- ========================================================
+    -- REPLAY DETECTION (REDUCED RISK)
+    -- ========================================================
+    local replay_key = "jwt_ip:" .. token_hash
+    local prev_ip = cache and cache:get(replay_key)
+
+    if prev_ip and prev_ip ~= ip then
+        ctx.security.jwt_replay = true
+
+        -- 🔥 giảm risk để tránh false positive
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+
+        ngx.log(ngx.WARN,
+            "[JWT] Replay old=", prev_ip,
+            " new=", ip
+        )
+    else
+        if cache then
+            cache:set(replay_key, ip, payload.exp - now)
+        end
+    end
+
+    -- ========================================================
+    -- CACHE VALID TOKEN
+    -- ========================================================
+    local ttl = payload.exp - now
+
+    if cache and ttl > 0 then
         cache:set(token_hash, true, ttl)
     end
 
+    -- ========================================================
+    -- PASS USER CONTEXT
+    -- ========================================================
     ngx.req.set_header("X-User-ID",   tostring(payload.user_id))
     ngx.req.set_header("X-User-Role", tostring(payload.role or "user"))
 
-    return nil
+    ctx.security.jwt_valid = true
 end
 
 return _M
