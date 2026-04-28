@@ -200,7 +200,6 @@ docker image prune -f
 rm -f /tmp/deploy_script.sh
 '''
 
-```
                 sshagent(credentials: [EC2_SSH_CREDS]) {
                     sh """
                     scp -o StrictHostKeyChecking=no /tmp/deploy_script.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_script.sh
