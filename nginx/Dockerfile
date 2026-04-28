@@ -26,34 +26,25 @@ RUN mkdir -p /usr/local/openresty/nginx/lua \
 # 🔒 INSTALL LUA MODULES (STABLE + NO 404)
 # =============================================================================
 RUN set -euxo pipefail && \
-
-curl -fL https://github.com/ledgetech/lua-resty-http/archive/refs/tags/v0.17.2.tar.gz | tar -xz && \
-cp lua-resty-http-0.17.2/lib/resty/http.lua /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/openresty/lua-resty-redis/archive/refs/tags/v0.29.tar.gz | tar -xz && \
-cp lua-resty-redis-0.29/lib/resty/redis.lua /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/openresty/lua-resty-limit-traffic/archive/refs/tags/v0.07.tar.gz | tar -xz && \
-cp -r lua-resty-limit-traffic-0.07/lib/resty/limit /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
-cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-
+ curl -fL https://github.com/ledgetech/lua-resty-http/archive/refs/tags/v0.17.2.tar.gz | tar -xz && \
+ cp lua-resty-http-0.17.2/lib/resty/http.lua /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/openresty/lua-resty-redis/archive/refs/tags/v0.29.tar.gz | tar -xz && \
+ cp lua-resty-redis-0.29/lib/resty/redis.lua /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/openresty/lua-resty-limit-traffic/archive/refs/tags/v0.07.tar.gz | tar -xz && \
+ cp -r lua-resty-limit-traffic-0.07/lib/resty/limit /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
+ cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 # 🔒 PINNED VERSION (QUAN TRỌNG)
-curl -fL https://github.com/jprjr/lua-resty-hmac/archive/3d3f0d6.tar.gz | tar -xz && \
-cp lua-resty-hmac-*/lib/resty/hmac.lua /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.3.tar.gz | tar -xz && \
-cp -r lua-resty-jwt-0.2.3/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/v1.4.0.tar.gz | tar -xz && \
-cp -r lua-resty-openssl-1.4.0/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-
-curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
-cp nginx-lua-prometheus-*/prometheus.lua /usr/local/openresty/lualib/ && \
-cp nginx-lua-prometheus-*/prometheus_resty_counter.lua /usr/local/openresty/lualib/ && \
-
-rm -rf lua-resty-* nginx-lua-prometheus-*
+ curl -fL https://github.com/jprjr/lua-resty-hmac/archive/refs/tags/v0.06.tar.gz | tar -xz && \
+ cp lua-resty-hmac-*/lib/resty/hmac.lua /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.3.tar.gz | tar -xz && \
+ cp -r lua-resty-jwt-0.2.3/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/v1.4.0.tar.gz | tar -xz && \
+ cp -r lua-resty-openssl-1.4.0/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+ curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
+ cp nginx-lua-prometheus-*/prometheus.lua /usr/local/openresty/lualib/ && \
+ cp nginx-lua-prometheus-*/prometheus_resty_counter.lua /usr/local/openresty/lualib/ && \
+ rm -rf lua-resty-* nginx-lua-prometheus-*
 
 # =============================================================================
 # 🧪 VERIFY
