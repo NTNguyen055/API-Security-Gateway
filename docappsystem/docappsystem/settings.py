@@ -157,10 +157,11 @@ DATABASES = {
         'OPTIONS': {
             'charset': 'utf8mb4',
             'connect_timeout': 5,
+            # [FIX] Bật Strict Mode để chiều lòng Django
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
         }
     }
 }
-
 # ============================================================
 # PASSWORD VALIDATION
 # ============================================================
