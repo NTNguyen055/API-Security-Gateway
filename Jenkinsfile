@@ -71,11 +71,13 @@ pipeline {
                 fi
 
                 echo "2. Running Gateway Nginx syntax check..."
+                # [FIX] Sinh SSL giả (Dummy Cert) để vượt qua bước check file của Nginx
                 GW_OUTPUT=$(docker run --rm \
                     --add-host app:127.0.0.1 \
                     --add-host redis:127.0.0.1 \
+                    --entrypoint /bin/sh \
                     $GW_IMAGE:$IMAGE_TAG \
-                    openresty -t 2>&1)
+                    -c "mkdir -p /etc/letsencrypt/live/dacn3.duckdns.org && openssl req -x509 -nodes -days 1 -newkey rsa:2048 -keyout /etc/letsencrypt/live/dacn3.duckdns.org/privkey.pem -out /etc/letsencrypt/live/dacn3.duckdns.org/fullchain.pem -subj '/CN=localhost' 2>/dev/null && openresty -t 2>&1")
                 
                 echo "$GW_OUTPUT"
 
