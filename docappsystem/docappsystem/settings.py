@@ -81,7 +81,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # ============================================================
 # SECURITY HEADERS
 # ============================================================
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = get_env("SECURE_SSL_REDIRECT", "False").lower() == "true"
 
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
@@ -180,15 +180,10 @@ USE_I18N = True
 USE_TZ = True
 
 # ============================================================
-# STATIC & MEDIA
+# STATIC & MEDIA (BASE PATHS)
 # ============================================================
-STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
-
-STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
-
-MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # ============================================================
@@ -255,9 +250,10 @@ else:
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
     }
-    # [FIX] Thêm 2 dòng này để Django không bị Crash khi test nội bộ
+    
     STATIC_URL = '/static/'
     MEDIA_URL = '/media/'
+
 # ============================================================
 # LOGGING (CRITICAL FOR DEBUG)
 # ============================================================
