@@ -34,13 +34,13 @@ cp -r lua-resty-limit-traffic-0.08/lib/resty/* /usr/local/openresty/lualib/resty
 # 4. lua-resty-string (v0.15)
 curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
 cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 5. lua-resty-jwt (SỬA LẠI THÀNH TAG v0.2.2 CHUẨN)
-curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.2.tar.gz | tar -xz && \
-cp -r lua-resty-jwt-0.2.2/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 5. lua-resty-jwt (Locked bằng commit hash ee1d024 - Bất biến vĩnh viễn)
+curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/ee1d024.tar.gz | tar -xz && \
+cp -r lua-resty-jwt-ee1d024*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 # 6. lua-resty-hmac (Locked bằng commit hash 23da759 - Bất biến vĩnh viễn)
 curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/23da759.tar.gz | tar -xz && \
 cp -r lua-resty-hmac-23da759*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 7. lua-resty-openssl (1.7.1 - Không có chữ v ở đầu)
+# 7. lua-resty-openssl (1.7.1)
 curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/1.7.1.tar.gz | tar -xz && \
 cp -r lua-resty-openssl-1.7.1/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 # 8. nginx-lua-prometheus (0.20240525)
