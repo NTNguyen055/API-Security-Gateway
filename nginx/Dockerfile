@@ -43,10 +43,9 @@ cp -r lua-resty-hmac-23da759*/lib/resty/* /usr/local/openresty/lualib/resty/ && 
 # 7. lua-resty-openssl (1.7.1)
 curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/1.7.1.tar.gz | tar -xz && \
 cp -r lua-resty-openssl-1.7.1/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 8. nginx-lua-prometheus (0.20240525)
+# 8. nginx-lua-prometheus (0.20240525 - SỬ DỤNG *.lua ĐỂ COPY TOÀN BỘ)
 curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
-cp nginx-lua-prometheus-*/prometheus.lua /usr/local/openresty/lualib/ && \
-cp nginx-lua-prometheus-*/prometheus_resty_counter.lua /usr/local/openresty/lualib/ && \
+cp nginx-lua-prometheus-*/*.lua /usr/local/openresty/lualib/ && \
 # Cleanup
 rm -rf lua-resty-* nginx-lua-prometheus-*
 
