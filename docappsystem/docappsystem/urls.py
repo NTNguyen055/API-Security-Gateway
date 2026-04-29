@@ -1,10 +1,12 @@
 from django.contrib import admin
 from django.urls import path
-from . import views, adminviews, docviews, userviews
 from django.conf.urls.static import static
 from django.conf import settings
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+
+# Import các views
+from . import views, adminviews, docviews, userviews
 
 # ============================================================
 # HEALTH CHECK (OPTIMIZED FOR GATEWAY + DOCKER + JENKINS)
@@ -13,16 +15,15 @@ from django.views.decorators.csrf import csrf_exempt
 def health_check(request):
     return JsonResponse({"status": "ok"}, status=200)
 
-
 urlpatterns = [
 
     # =========================================================
-    # PUBLIC (NO JWT)
+    # PUBLIC (NO JWT REQUIRED)
     # =========================================================
     path('login/', views.LOGIN, name='login'),
     path('doLogin/', views.doLogin, name='doLogin'),
-
-    # 🔥 FIX: đảm bảo match cả /health và /health/
+    
+    # Đảm bảo match cả /health và /health/ để tránh 301 Redirect Loop
     path('health/', health_check, name='health'),
     path('health', health_check),
 

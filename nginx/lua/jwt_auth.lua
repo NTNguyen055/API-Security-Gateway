@@ -8,14 +8,17 @@ local ngx = ngx
 local re_match = ngx.re.match
 local math_min = math.min
 
-local JWT_SECRET = os.getenv("JWT_SECRET_KEY")
+-- [FIX] Đã xóa JWT_SECRET ở đây để chuyển vào bên trong hàm run
 
 local PUBLIC_PATHS = {
     ["/login"] = true,
     ["/login/"] = true,
     ["/doLogin"] = true,
     ["/doLogin/"] = true,
-    ["/health/"] = true
+    ["/health"] = true,
+    ["/health/"] = true,
+    ["/doctor/signup/"] = true,    -- [MỚI] Cho phép bác sĩ đăng ký
+    ["/admin/login/"] = true       -- [MỚI] Cho phép đăng nhập Django Admin
 }
 
 local function hash_token(token)
@@ -25,6 +28,8 @@ local function hash_token(token)
 end
 
 function _M.run(ctx)
+    -- [FIX] Đọc JWT_SECRET động bên trong hàm để luôn bắt được key mới nhất
+    local JWT_SECRET = os.getenv("JWT_SECRET_KEY")
     if not JWT_SECRET or JWT_SECRET == "" then
         return
     end
@@ -72,8 +77,24 @@ function _M.run(ctx)
 
     local cache = ngx.shared.jwt_cache
 
-    if cache and cache:get(token_hash) then
-        return
+    -- [FIX] Khôi phục Session từ Cache thay vì chỉ bypass
+    if cache then
+        local cached_payload = cache:get(token_hash)
+        if cached_payload then
+            -- Tách user_id và role từ chuỗi cache
+            local user_id, role = cached_payload:match("^([^:]+):(.*)$")
+            if user_id then
+                ngx.req.set_header("X-User-ID", user_id)
+                ngx.req.set_header("X-User-Role", role or "user")
+
+                ctx.identity = {
+                    user_id = tonumber(user_id) or user_id,
+                    role = role or "user"
+                }
+                ctx.security.jwt_valid = true
+                return
+            end
+        end
     end
 
     -- LOAD JWT FIRST
@@ -148,7 +169,9 @@ function _M.run(ctx)
     end
 
     if cache then
-        cache:set(token_hash, true, ttl)
+        -- [FIX] Lưu định dạng "user_id:role" vào cache để tái sử dụng
+        local cache_val = tostring(payload.user_id) .. ":" .. tostring(payload.role or "user")
+        cache:set(token_hash, cache_val, ttl)
     end
 
     ngx.req.set_header("X-User-ID", tostring(payload.user_id))

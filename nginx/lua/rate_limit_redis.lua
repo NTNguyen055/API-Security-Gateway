@@ -4,9 +4,6 @@ local ngx = ngx
 local tonumber = tonumber
 local math_min = math.min
 
-local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
-local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
-
 local LOCAL_THROTTLE_TTL = 1
 
 local REDIS_SCRIPT = [[
@@ -27,7 +24,17 @@ local function get_redis()
 
     red:set_timeouts(50, 50, 50)
 
-    local ok, err = red:connect("redis", 6379)
+    -- [FIX] Đọc cấu hình từ biến môi trường, fallback về mặc định an toàn
+    local host = "redis"
+    local port = 6379
+    local redis_url = os.getenv("REDIS_URL")
+    if redis_url then
+        local parsed_host, parsed_port = redis_url:match("redis://([^:/]+):?(%d*)")
+        if parsed_host then host = parsed_host end
+        if parsed_port and parsed_port ~= "" then port = tonumber(parsed_port) end
+    end
+
+    local ok, err = red:connect(host, port)
     if not ok then
         return nil, err
     end
@@ -36,12 +43,16 @@ local function get_redis()
 end
 
 function _M.run(ctx)
+    -- [FIX] Đưa biến môi trường vào trong hàm để đảm bảo load đúng giá trị động
+    local REDIS_RATE_LIMIT = tonumber(os.getenv("REDIS_RATE_LIMIT")) or 30
+    local REDIS_RL_WINDOW  = tonumber(os.getenv("REDIS_RL_WINDOW"))  or 60
+
     local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
     local uri = ngx.var.uri or ""
     ctx.security = ctx.security or {}
     ctx.security.signals = ctx.security.signals or {}
 
-    -- LOCAL THROTTLE
+    -- LOCAL THROTTLE (Đã hoạt động tốt vì rl_cache đã được thêm ở nginx.conf)
     local throttle = ngx.shared.rl_cache
     if throttle and (ctx.security.risk or 0) < 30 then
         local hit = throttle:get(ip)

@@ -26,6 +26,9 @@ document\.cookie|
 local function normalize(input)
     if not input then return "" end
 
+    -- Bắt lỗi nếu lỡ truyền table vào normalize (phòng thủ thêm 1 lớp)
+    if type(input) == "table" then return "" end
+
     input = ngx.unescape_uri(input)
     input = ngx.unescape_uri(input)
 
@@ -42,7 +45,8 @@ local function check(value, ctx)
 
     local v = normalize(value)
 
-    if re_find(v, SQLI_PATTERN, "ijo") then
+    -- [FIX 1] Đổi "ijo" thành "ijox" để pattern nhiều dòng hoạt động đúng
+    if re_find(v, SQLI_PATTERN, "ijox") then
         ctx.security.waf_sqli = true
 
         local base = 30
@@ -57,7 +61,8 @@ local function check(value, ctx)
         return true
     end
 
-    if re_find(v, XSS_PATTERN, "ijo") then
+    -- [FIX 1] Tương tự với XSS
+    if re_find(v, XSS_PATTERN, "ijox") then
         ctx.security.waf_xss = true
 
         ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
@@ -72,6 +77,19 @@ local function check(value, ctx)
     return false
 end
 
+-- [FIX 2] Hàm hỗ trợ xử lý mảng (dành cho trường hợp gửi trùng nhiều Header/Query)
+local function check_multi(value, ctx)
+    if not value then return false end
+    if type(value) == "table" then
+        for _, v in ipairs(value) do
+            if check(v, ctx) then return true end
+        end
+        return false
+    else
+        return check(value, ctx)
+    end
+end
+
 function _M.run(ctx)
     ctx.security = ctx.security or {}
 
@@ -83,20 +101,15 @@ function _M.run(ctx)
     local args = ngx.req.get_uri_args()
 
     for _, v in pairs(args) do
-        if type(v) == "table" then
-            for _, vv in ipairs(v) do
-                if check(vv, ctx) then return end
-            end
-        else
-            if check(v, ctx) then return end
-        end
+        if check_multi(v, ctx) then return end
     end
 
     -- HEADERS
     local headers = ngx.req.get_headers()
 
-    if check(headers["user-agent"], ctx) then return end
-    if check(headers["referer"], ctx) then return end
+    -- [FIX 2] Áp dụng check_multi để chống crash khi có nhiều User-Agent/Referer
+    if check_multi(headers["user-agent"], ctx) then return end
+    if check_multi(headers["referer"], ctx) then return end
 
     -- BODY
     local method = ngx.req.get_method()

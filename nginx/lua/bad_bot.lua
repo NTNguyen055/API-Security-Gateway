@@ -63,6 +63,7 @@ function _M.run(ctx)
     if ua:find("Mozilla", 1, true)
        and not contains_any(ua_lower, SCANNERS)
        and not contains_any(ua_lower, HEADLESS)
+       and not contains_any(ua_lower, DEV_TOOLS) -- [FIX] Chặn bypass bằng Dev Tools giả danh Mozilla
     then
         ctx.security.ua_normal = true
         return

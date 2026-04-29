@@ -14,6 +14,9 @@ local GEO_CACHE_TTL = 86400
 local GEO_FAIL_TTL  = 60
 local GEO_TIMEOUT   = 500
 
+-- [FIX] Giới hạn số gọi API tối đa để tránh bị ban và treo hệ thống
+local MAX_API_CALLS_PER_MIN = 40
+
 local function is_private_ip(ip)
     if not ip then return false end
 
@@ -100,9 +103,25 @@ function _M.run(ctx)
         return
     end
 
-    -- throttle lookup
+    -- Throttle lookup (chống Dogpile effect cho cùng 1 IP)
     local lock = cache:add("geo_lock:" .. ip, true, 5)
     if not lock then
+        return
+    end
+
+    -- [FIX] Áp dụng Circuit Breaker: Kiểm tra xem phút này đã gọi API quá mức chưa
+    local current_min = math.floor(ngx.time() / 60)
+    local api_req_key = "api_req_count:" .. current_min
+    local req_count, err = cache:incr(api_req_key, 1, 0, 60)
+
+    if req_count and req_count > MAX_API_CALLS_PER_MIN then
+        -- Cầu dao ngắt: Fail-open an toàn, không gọi API nữa
+        cache:set(ip, "A", GEO_FAIL_TTL)
+        ctx.security.geo_allowed = true
+        
+        if req_count == MAX_API_CALLS_PER_MIN + 1 then
+            ngx.log(ngx.WARN, "[GEO] CIRCUIT BREAKER TRIPPED! API calls > ", MAX_API_CALLS_PER_MIN, "/min. Defaulting to ALLOW.")
+        end
         return
     end
 

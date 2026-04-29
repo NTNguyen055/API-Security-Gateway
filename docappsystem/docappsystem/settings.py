@@ -114,6 +114,10 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
 
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    
+    # [FIX] Thêm Middleware đồng bộ Gateway ngay sau Authentication mặc định
+    'docappsystem.middleware.GatewayIntegrationMiddleware',
+
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

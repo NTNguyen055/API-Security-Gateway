@@ -46,6 +46,7 @@ function _M.run(ctx)
     end
 
     ctx.security = ctx.security or {}
+    ctx.security.signals = ctx.security.signals or {} -- [FIX] Khởi tạo mảng signals
 
     local ips = parse_xff(xff)
 
@@ -55,6 +56,7 @@ function _M.run(ctx)
     if #ips == 0 then
         ctx.security.xff_malformed = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
+        table.insert(ctx.security.signals, "xff_spoof") -- [FIX] Bắn tín hiệu cho Risk Engine
         return
     end
 
@@ -64,6 +66,7 @@ function _M.run(ctx)
     if #ips > MAX_CHAIN then
         ctx.security.xff_chain_abuse = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
+        table.insert(ctx.security.signals, "xff_spoof") -- [FIX] Bắn tín hiệu cho Risk Engine
 
         ngx.log(ngx.WARN,
             "[XFF_GUARD] Chain too long: ", #ips,
@@ -79,6 +82,7 @@ function _M.run(ctx)
     if is_private_ip(client_ip) then
         ctx.security.xff_private_client = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+        table.insert(ctx.security.signals, "xff_spoof") -- [FIX] Bắn tín hiệu cho Risk Engine
 
         ngx.log(ngx.WARN,
             "[XFF_GUARD] Private IP as client: ", client_ip
@@ -86,9 +90,10 @@ function _M.run(ctx)
     end
 
     -- ========================================================
-    -- SANITIZE HEADER (normalize spacing only)
+    -- [FIX] ĐÃ XÓA NGX.REQ.SET_HEADER 
+    -- Nginx đã tự động xử lý chuẩn hóa bằng $remote_addr ở phần proxy pass, 
+    -- việc set lại ở đây là dư thừa và làm chậm tiến trình Lua.
     -- ========================================================
-    ngx.req.set_header("X-Forwarded-For", table.concat(ips, ", "))
 end
 
 return _M

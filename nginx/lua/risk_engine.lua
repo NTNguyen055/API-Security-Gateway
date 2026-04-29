@@ -4,8 +4,7 @@ local ngx = ngx
 local tonumber = tonumber
 local math_min = math.min
 
-local BLOCK_THRESHOLD = tonumber(os.getenv("RISK_BLOCK_THRESHOLD")) or 80
-local LIMIT_THRESHOLD = tonumber(os.getenv("RISK_LIMIT_THRESHOLD")) or 50
+-- [FIX] Đã di chuyển BLOCK_THRESHOLD và LIMIT_THRESHOLD vào trong hàm run()
 
 local DECAY_FACTOR = 0.9
 local MAX_RISK     = 100
@@ -16,7 +15,17 @@ local function get_redis()
 
     red:set_timeouts(50, 50, 50)
 
-    local ok, err = red:connect("redis", 6379)
+    -- [FIX] Đọc cấu hình từ biến môi trường thay vì hardcode
+    local host = "redis"
+    local port = 6379
+    local redis_url = os.getenv("REDIS_URL")
+    if redis_url then
+        local parsed_host, parsed_port = redis_url:match("redis://([^:/]+):?(%d*)")
+        if parsed_host then host = parsed_host end
+        if parsed_port and parsed_port ~= "" then port = tonumber(parsed_port) end
+    end
+
+    local ok, err = red:connect(host, port)
     if not ok then
         return nil, err
     end
@@ -25,27 +34,20 @@ local function get_redis()
 end
 
 function _M.run(ctx)
+    -- [FIX] Đọc biến môi trường trong hàm để đảm bảo có data động
+    local BLOCK_THRESHOLD = tonumber(os.getenv("RISK_BLOCK_THRESHOLD")) or 80
+    local LIMIT_THRESHOLD = tonumber(os.getenv("RISK_LIMIT_THRESHOLD")) or 50
+
     local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
 
     ctx.security = ctx.security or {}
     local base_risk = ctx.security.risk or 0
 
-    -- ================= SIGNAL CORRELATION =================
-    local signals = ctx.security.signals or {}
-
-    for _, s in ipairs(signals) do
-        if s == "waf_sqli" then
-            base_risk = base_risk + 20
-        elseif s == "xff_spoof" then
-            base_risk = base_risk + 15
-        elseif s == "bad_bot" then
-            base_risk = base_risk + 10
-        elseif s == "rate_limit_hard" then
-            base_risk = base_risk + 20
-        elseif s == "redis_rate_exceeded" then
-            base_risk = base_risk + 15
-        end
-    end
+    -- =================================================================
+    -- [FIX] ĐÃ XÓA BLOCK "SIGNAL CORRELATION"
+    -- Lý do: Ngăn chặn lỗi cộng dồn điểm kép (Double Counting). 
+    -- Các module con đã tự động cộng điểm rủi ro vào biến ctx.security.risk.
+    -- =================================================================
 
     -- ================= REDIS =================
     local red, err = get_redis()
@@ -74,12 +76,12 @@ function _M.run(ctx)
 
     local final_risk = reputation * DECAY_FACTOR + base_risk
 
-    -- momentum
+    -- momentum (quán tính phạt thêm)
     if base_risk > 30 then
         final_risk = final_risk + 10
     end
 
-    -- forgiveness
+    -- forgiveness (tha thứ nếu rủi ro thấp)
     if base_risk < 10 then
         final_risk = final_risk * 0.8
     end

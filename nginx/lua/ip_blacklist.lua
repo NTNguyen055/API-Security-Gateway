@@ -12,7 +12,19 @@ local function get_redis()
 
     red:set_timeouts(50, 50, 50)
 
-    local ok, err = red:connect("redis", 6379)
+    -- [FIX] Đọc cấu hình từ biến môi trường, fallback về mặc định an toàn
+    local host = "redis"
+    local port = 6379
+    
+    -- Thử parse REDIS_URL nếu có (ví dụ: redis://redis:6379/1)
+    local redis_url = os.getenv("REDIS_URL")
+    if redis_url then
+        local parsed_host, parsed_port = redis_url:match("redis://([^:/]+):?(%d*)")
+        if parsed_host then host = parsed_host end
+        if parsed_port and parsed_port ~= "" then port = tonumber(parsed_port) end
+    end
+
+    local ok, err = red:connect(host, port)
     if not ok then
         return nil, err
     end
@@ -66,7 +78,13 @@ function _M.run(ctx)
 
         ctx.security.redis_bl_fail = true
 
-        if ctx.security.xff_spoof or ctx.security.bad_bot then
+        -- [FIX] Sửa lại tên các biến kiểm tra cho khớp với các module trước
+        local is_suspicious = ctx.security.bad_bot_scanner or 
+                              ctx.security.bad_bot_headless or 
+                              ctx.security.xff_chain_abuse or
+                              ctx.security.xff_private_client
+
+        if is_suspicious then
             ctx.security.risk = math_min((ctx.security.risk or 0) + 15, 100)
         else
             ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)

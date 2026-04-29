@@ -116,7 +116,7 @@ services:
 networks:
   internal:
     driver: bridge
-    internal: true
+    # Đã xoá 'internal: true' ở đây để App có thể kết nối RDS và S3
 
 volumes:
   redis_data:

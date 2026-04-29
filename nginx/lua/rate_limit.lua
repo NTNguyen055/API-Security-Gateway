@@ -13,6 +13,7 @@ local function get_limiter()
 
     local limit_req = require "resty.limit.req"
 
+    -- [FIX] Đưa os.getenv vào trong hàm để đảm bảo load đúng giá trị
     local rate  = tonumber(os.getenv("RATE_LIMIT_RPS"))   or 10
     local burst = tonumber(os.getenv("RATE_LIMIT_BURST")) or 20
 
@@ -26,13 +27,16 @@ local function get_limiter()
     return lim
 end
 
-local AUTO_BL_THRESHOLD = tonumber(os.getenv("AUTO_BL_THRESHOLD")) or 5
-local AUTO_BL_WINDOW    = tonumber(os.getenv("AUTO_BL_WINDOW"))    or 60
-local AUTO_BL_DURATION  = tonumber(os.getenv("AUTO_BL_DURATION"))  or 3600
+-- [FIX] Đã di chuyển các hằng số AUTO_BL_* vào bên trong hàm auto_blacklist
 
 local function auto_blacklist(ip, ctx)
     local counter_store = ngx.shared.rl_counter
     if not counter_store then return end
+
+    -- [FIX] Đọc config môi trường ngay lúc thực thi
+    local AUTO_BL_THRESHOLD = tonumber(os.getenv("AUTO_BL_THRESHOLD")) or 5
+    local AUTO_BL_WINDOW    = tonumber(os.getenv("AUTO_BL_WINDOW"))    or 60
+    local AUTO_BL_DURATION  = tonumber(os.getenv("AUTO_BL_DURATION"))  or 3600
 
     local count = counter_store:incr("rl:" .. ip, 1, 0, AUTO_BL_WINDOW)
     if not count then return end
@@ -58,12 +62,25 @@ local function auto_blacklist(ip, ctx)
         local red = redis:new()
         red:set_timeouts(100, 100, 100)
 
-        if not red:connect("redis", 6379) then
+        -- [FIX] Dùng REDIS_URL thay vì hardcode
+        local host = "redis"
+        local port = 6379
+        local redis_url = os.getenv("REDIS_URL")
+        if redis_url then
+            local parsed_host, parsed_port = redis_url:match("redis://([^:/]+):?(%d*)")
+            if parsed_host then host = parsed_host end
+            if parsed_port and parsed_port ~= "" then port = tonumber(parsed_port) end
+        end
+
+        if not red:connect(host, port) then
             return
         end
 
-        -- TTL-based blacklist (adaptive friendly)
-        red:set("blacklist:" .. target_ip, 1, "EX", duration)
+        -- [FIX] Add IP vào SET 'blacklist_ips' để đồng bộ với ip_blacklist.lua
+        red:sadd("blacklist_ips", target_ip)
+        
+        -- Vẫn giữ lại key string để tham khảo TTL nếu cần cho mục đích khác
+        red:set("blacklist_ttl:" .. target_ip, 1, "EX", duration)
 
         red:set_keepalive(10000, 100)
 

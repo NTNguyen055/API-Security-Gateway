@@ -43,16 +43,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
  && rm -rf /var/lib/apt/lists/*
 
+# ================= SECURITY & PERMISSIONS =================
+# [FIX] Tạo user trước để có thể gán quyền chown
+RUN useradd -m appuser
+
+# [FIX] Tạo sẵn các thư mục cần thiết cho Django và cấp quyền cho appuser
+RUN mkdir -p /app/staticfiles /app/media \
+ && chown -R appuser:appuser /app
+
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir /wheels/* \
  && rm -rf /wheels
 
-COPY . .
+# [FIX] Copy code và chuyển quyền sở hữu ngay lập tức cho appuser
+COPY --chown=appuser:appuser . .
 
-# ================= SECURITY =================
-RUN useradd -m appuser
+# Từ đây trở đi mọi lệnh sẽ chạy dưới quyền appuser an toàn
 USER appuser
 
 # ================= RUNTIME =================
