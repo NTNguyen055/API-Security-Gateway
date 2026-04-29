@@ -19,29 +19,35 @@ RUN mkdir -p /usr/local/openresty/nginx/lua \
  && mkdir -p /usr/local/openresty/lualib/resty
 
 # =============================================================================
-# 🔒 INSTALL LUA MODULES (FIXED)
-# =============================================================================
-# =============================================================================
-# 🔒 INSTALL LUA MODULES (FIXED)
+# 🔒 INSTALL LUA MODULES (PRODUCTION-GRADE DETERMINISTIC BUILD)
 # =============================================================================
 RUN set -eux && \
+# 1. lua-resty-http (v0.17.2)
 curl -fL https://github.com/ledgetech/lua-resty-http/archive/refs/tags/v0.17.2.tar.gz | tar -xz && \
-cp lua-resty-http-0.17.2/lib/resty/http.lua /usr/local/openresty/lualib/resty/ && \
+cp -r lua-resty-http-0.17.2/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 2. lua-resty-redis (v0.29)
 curl -fL https://github.com/openresty/lua-resty-redis/archive/refs/tags/v0.29.tar.gz | tar -xz && \
-cp lua-resty-redis-0.29/lib/resty/redis.lua /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/openresty/lua-resty-limit-traffic/archive/refs/tags/v0.07.tar.gz | tar -xz && \
-cp -r lua-resty-limit-traffic-0.07/lib/resty/limit /usr/local/openresty/lualib/resty/ && \
+cp -r lua-resty-redis-0.29/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 3. lua-resty-limit-traffic (v0.08)
+curl -fL https://github.com/openresty/lua-resty-limit-traffic/archive/refs/tags/v0.08.tar.gz | tar -xz && \
+cp -r lua-resty-limit-traffic-0.08/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 4. lua-resty-string (v0.15)
 curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
 cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/heads/master.tar.gz | tar -xz && \
-cp -r lua-resty-jwt-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/refs/heads/master.tar.gz | tar -xz && \
-cp -r lua-resty-hmac-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/heads/master.tar.gz | tar -xz && \
-cp -r lua-resty-openssl-master/lib/resty/openssl /usr/local/openresty/lualib/resty/ && \
+# 5. lua-resty-jwt (v0.2.3 - Bản Release ổn định nhất)
+curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.3.tar.gz | tar -xz && \
+cp -r lua-resty-jwt-0.2.3/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 6. lua-resty-hmac (Locked bằng commit hash 23da759 - Bất biến vĩnh viễn)
+curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/23da759.tar.gz | tar -xz && \
+cp -r lua-resty-hmac-23da759*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 7. lua-resty-openssl (1.7.1 - Không có chữ v ở đầu)
+curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/1.7.1.tar.gz | tar -xz && \
+cp -r lua-resty-openssl-1.7.1/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 8. nginx-lua-prometheus (0.20240525)
 curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
 cp nginx-lua-prometheus-*/prometheus.lua /usr/local/openresty/lualib/ && \
 cp nginx-lua-prometheus-*/prometheus_resty_counter.lua /usr/local/openresty/lualib/ && \
+# Cleanup
 rm -rf lua-resty-* nginx-lua-prometheus-*
 
 # =============================================================================
