@@ -49,9 +49,7 @@ pipeline {
                 sh '''
                 set +e
 
-                echo "Running Django syntax and configuration check..."
-
-                # Cấp phát các biến môi trường ảo (Mock) để vượt qua vòng validate của settings.py
+                echo "1. Running Django syntax and configuration check..."
                 OUTPUT=$(docker run --rm \
                     --entrypoint "" \
                     -e DEBUG=True \
@@ -66,14 +64,28 @@ pipeline {
 
                 echo "$OUTPUT"
 
-                # Lệnh check sẽ ném ra chữ 'SystemCheckError' hoặc 'Exception' nếu code lỗi
                 echo "$OUTPUT" | grep -qEi "SystemCheckError|Exception|Error"
                 if [ $? -eq 0 ]; then
-                    echo "TEST FAILED: Code có lỗi cấu trúc hoặc cú pháp."
+                    echo "TEST FAILED: Code Django có lỗi cấu trúc hoặc cú pháp."
                     exit 1
                 fi
 
-                echo "TEST PASSED: Cấu trúc Django hợp lệ."
+                echo "2. Running Gateway Nginx syntax check..."
+                GW_OUTPUT=$(docker run --rm \
+                    --add-host app:127.0.0.1 \
+                    --add-host redis:127.0.0.1 \
+                    $GW_IMAGE:$IMAGE_TAG \
+                    openresty -t 2>&1)
+                
+                echo "$GW_OUTPUT"
+
+                echo "$GW_OUTPUT" | grep -q "syntax is ok"
+                if [ $? -ne 0 ]; then
+                    echo "TEST FAILED: Cấu hình Gateway Nginx không hợp lệ."
+                    exit 1
+                fi
+
+                echo "✅ ALL TESTS PASSED!"
                 '''
             }
         }

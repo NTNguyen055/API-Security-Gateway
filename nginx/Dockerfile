@@ -77,12 +77,7 @@ COPY lua/       /usr/local/openresty/nginx/lua/
 RUN chmod -R 755 /usr/local/openresty/lualib \
  && chmod -R 755 /usr/local/openresty/nginx/lua \
  && mkdir -p /usr/local/openresty/nginx/logs
-
-# =============================================================================
-# VALIDATE
-# =============================================================================
-RUN echo "127.0.0.1 app redis" >> /etc/hosts && openresty -t
-
+    
 # =============================================================================
 # RUN
 # =============================================================================
