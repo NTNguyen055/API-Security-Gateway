@@ -255,6 +255,9 @@ else:
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
     }
+    # [FIX] Thêm 2 dòng này để Django không bị Crash khi test nội bộ
+    STATIC_URL = '/static/'
+    MEDIA_URL = '/media/'
 # ============================================================
 # LOGGING (CRITICAL FOR DEBUG)
 # ============================================================

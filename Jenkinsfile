@@ -59,6 +59,9 @@ pipeline {
                     -e DB_USER=test_user \
                     -e DB_PASSWORD=test_pass \
                     -e DB_HOST=localhost \
+                    -e USE_S3=False \
+                    -e AWS_STORAGE_BUCKET_NAME=dummy-bucket \
+                    -e AWS_S3_REGION_NAME=ap-northeast-1 \
                     $APP_IMAGE:$IMAGE_TAG \
                     python manage.py check --verbosity=2 2>&1)
 
