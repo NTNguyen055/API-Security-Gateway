@@ -214,7 +214,7 @@ CACHES = {
 }
 
 # ============================================================
-# AWS S3 (OPTIONAL)
+# AWS S3 (OPTIONAL) & STORAGE BACKENDS
 # ============================================================
 USE_S3 = get_env('USE_S3', 'False') == 'True'
 
@@ -245,7 +245,16 @@ if USE_S3:
 
     STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
     MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
-
+else:
+    # Chuẩn mới của Django 4.2+ khi không dùng S3 (Lưu local)
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 # ============================================================
 # LOGGING (CRITICAL FOR DEBUG)
 # ============================================================
