@@ -21,6 +21,9 @@ RUN mkdir -p /usr/local/openresty/nginx/lua \
 # =============================================================================
 # 🔒 INSTALL LUA MODULES (FIXED)
 # =============================================================================
+# =============================================================================
+# 🔒 INSTALL LUA MODULES (FIXED)
+# =============================================================================
 RUN set -eux && \
 curl -fL https://github.com/ledgetech/lua-resty-http/archive/refs/tags/v0.17.2.tar.gz | tar -xz && \
 cp lua-resty-http-0.17.2/lib/resty/http.lua /usr/local/openresty/lualib/resty/ && \
@@ -34,8 +37,8 @@ curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/heads/master.ta
 cp -r lua-resty-jwt-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/refs/heads/master.tar.gz | tar -xz && \
 cp -r lua-resty-hmac-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/v1.4.0.tar.gz | tar -xz && \
-cp -r lua-resty-openssl-1.4.0/lib/resty/openssl /usr/local/openresty/lualib/resty/ && \
+curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/heads/master.tar.gz | tar -xz && \
+cp -r lua-resty-openssl-master/lib/resty/openssl /usr/local/openresty/lualib/resty/ && \
 curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
 cp nginx-lua-prometheus-*/prometheus.lua /usr/local/openresty/lualib/ && \
 cp nginx-lua-prometheus-*/prometheus_resty_counter.lua /usr/local/openresty/lualib/ && \
