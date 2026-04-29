@@ -32,8 +32,8 @@ curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.t
 cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/heads/master.tar.gz | tar -xz && \
 cp -r lua-resty-jwt-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/refs/tags/0.06.tar.gz | tar -xz && \
-cp -r lua-resty-hmac-0.06/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/refs/heads/master.tar.gz | tar -xz && \
+cp -r lua-resty-hmac-master/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/v1.4.0.tar.gz | tar -xz && \
 cp -r lua-resty-openssl-1.4.0/lib/resty/openssl /usr/local/openresty/lualib/resty/ && \
 curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
