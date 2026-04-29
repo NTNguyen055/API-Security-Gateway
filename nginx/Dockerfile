@@ -34,9 +34,9 @@ cp -r lua-resty-limit-traffic-0.08/lib/resty/* /usr/local/openresty/lualib/resty
 # 4. lua-resty-string (v0.15)
 curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
 cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 5. lua-resty-jwt (v0.2.3 - Bản Release ổn định nhất)
-curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.3.tar.gz | tar -xz && \
-cp -r lua-resty-jwt-0.2.3/lib/resty/* /usr/local/openresty/lualib/resty/ && \
+# 5. lua-resty-jwt (SỬA LẠI THÀNH TAG v0.2.2 CHUẨN)
+curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/refs/tags/v0.2.2.tar.gz | tar -xz && \
+cp -r lua-resty-jwt-0.2.2/lib/resty/* /usr/local/openresty/lualib/resty/ && \
 # 6. lua-resty-hmac (Locked bằng commit hash 23da759 - Bất biến vĩnh viễn)
 curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/23da759.tar.gz | tar -xz && \
 cp -r lua-resty-hmac-23da759*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
