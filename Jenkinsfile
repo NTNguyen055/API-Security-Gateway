@@ -74,7 +74,7 @@ pipeline {
                 fi
 
                 echo "2. Running Gateway Nginx syntax check..."
-                # [FIX] Sinh SSL giả (Dummy Cert) để vượt qua bước check file của Nginx
+                # Sinh SSL giả (Dummy Cert) để vượt qua bước check file của Nginx
                 GW_OUTPUT=$(docker run --rm \
                     --add-host app:127.0.0.1 \
                     --add-host redis:127.0.0.1 \
@@ -87,6 +87,32 @@ pipeline {
                 echo "$GW_OUTPUT" | grep -q "syntax is ok"
                 if [ $? -ne 0 ]; then
                     echo "TEST FAILED: Cấu hình Gateway Nginx không hợp lệ."
+                    exit 1
+                fi
+
+                echo "3. Checking for missing migrations..."
+                # Chốt chặn kiểm tra xem Developer có quên tạo file migrations không
+                MIGRATION_CHECK=$(docker run --rm \
+                    --entrypoint "" \
+                    -e DEBUG=True \
+                    -e SECRET_KEY=test-key-safefail-123 \
+                    -e ALLOWED_HOSTS="*" \
+                    -e DB_NAME=test_db \
+                    -e DB_USER=test_user \
+                    -e DB_PASSWORD=test_pass \
+                    -e DB_HOST=localhost \
+                    -e USE_S3=False \
+                    -e AWS_STORAGE_BUCKET_NAME=dummy-bucket \
+                    -e AWS_S3_REGION_NAME=ap-northeast-1 \
+                    $APP_IMAGE:$IMAGE_TAG \
+                    python manage.py makemigrations --check --dry-run 2>&1 || true)
+                
+                echo "$MIGRATION_CHECK"
+                
+                if echo "$MIGRATION_CHECK" | grep -q "No changes detected"; then
+                    echo "✅ No missing migrations."
+                else
+                    echo "❌ TEST FAILED: Bạn đã thay đổi Models nhưng quên chạy 'makemigrations'!"
                     exit 1
                 fi
 
@@ -165,13 +191,20 @@ echo "[4] DEPLOY NEW VERSION"
 $DOCKER_COMPOSE --env-file "$ENV_PATH" pull
 $DOCKER_COMPOSE --env-file "$ENV_PATH" up -d --remove-orphans
 
-echo "WAIT 25s FOR CONTAINERS TO SPIN UP..."
-sleep 25
+echo "[5] HEALTH CHECK (WAITING UP TO 120s FOR AWS S3 SYNC...)"
 
-echo "[5] HEALTH CHECK"
+# Vòng lặp chờ trạng thái Healthy (Kiên nhẫn đợi collectstatic)
+for i in {1..24}; do
+    APP_STATUS=$(docker inspect -f "{{.State.Health.Status}}" docapp_django 2>/dev/null || echo "unknown")
+    echo "Check $i/24 -> Container Status: $APP_STATUS"
+    if [ "$APP_STATUS" = "healthy" ]; then
+        break
+    fi
+    sleep 5
+done
 
+# Kiểm tra HTTP thông qua Nginx Gateway
 HTTP_STATUS="000"
-
 for i in {1..10}; do
     HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     --max-time 5 \
@@ -181,7 +214,7 @@ for i in {1..10}; do
     -H "X-Forwarded-For: 127.0.0.1" \
     http://127.0.0.1/health/ || echo "000")
 
-    echo "Try $i -> HTTP Status: $HTTP_STATUS"
+    echo "Gateway Test $i -> HTTP Status: $HTTP_STATUS"
 
     if [ "$HTTP_STATUS" = "200" ]; then
         break
