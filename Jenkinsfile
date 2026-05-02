@@ -109,24 +109,24 @@ pipeline {
                 //   Khi deploy thật: gateway cùng network 'internal' với 'app' -> OK
                 //   Chỉ fail khi có lỗi cú pháp thật, bỏ qua lỗi DNS/upstream
                 sh '''
-                    echo "--- Validating nginx.conf syntax ---"
                     docker run --rm \
                         -v "$(pwd)/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
                         -v "$(pwd)/nginx/lua:/usr/local/openresty/nginx/lua:ro" \
                         openresty/openresty:alpine-fat \
-                        openresty -t 2>&1 | tee /tmp/nginx_test.log || true
+                        openresty -t > /tmp/nginx_test.log 2>&1
 
-                    # FIX: escape đúng cho Groovy + Bash
+                    NGINX_STATUS=$?
+
                     REAL_ERRORS=$( (
                         grep -E '\\[(emerg|alert|crit)\\]' /tmp/nginx_test.log \
                         | grep -v 'host not found in upstream' \
                         | grep -v 'no resolver defined'
                     ) || true )
 
-                    if grep -q "successful" /tmp/nginx_test.log; then
+                    if [ "$NGINX_STATUS" -eq 0 ]; then
                         echo "nginx.conf syntax OK"
                     elif [ -z "$REAL_ERRORS" ]; then
-                        echo "nginx.conf syntax OK (DNS warnings ignored — expected outside Docker network)"
+                        echo "nginx.conf syntax OK (DNS warnings ignored)"
                     else
                         echo "nginx.conf syntax FAILED — real config errors:"
                         echo "$REAL_ERRORS"
@@ -147,7 +147,7 @@ pipeline {
             steps {
                 echo "🏗️  [3/6] Building Docker images..."
 
-                sh """
+                sh '''
                     echo "--- Building Django App ---"
                     docker build \\
                         --pull \\
@@ -158,9 +158,9 @@ pipeline {
                         -f docappsystem/Dockerfile \\
                         ./docappsystem
                     echo "Django App built: ${APP_IMAGE}:${IMAGE_TAG}"
-                """
+                '''
 
-                sh """
+                sh '''
                     echo "--- Building OpenResty Gateway ---"
                     docker build \\
                         --pull \\
@@ -171,7 +171,7 @@ pipeline {
                         -f nginx/Dockerfile \\
                         ./nginx
                     echo "Gateway built: ${GW_IMAGE}:${IMAGE_TAG}"
-                """
+                '''
             }
         }
 
@@ -181,7 +181,7 @@ pipeline {
                 echo "🧪 [4/6] Running smoke tests..."
 
                 // Test Django image: chỉ verify container khởi động được
-                sh """
+                sh '''
                     docker run --rm \\
                         -e SECRET_KEY=smoke-only-not-real \\
                         -e DEBUG=False \\
@@ -194,12 +194,12 @@ pipeline {
                         ${APP_IMAGE}:${IMAGE_TAG} \\
                         python -c "print('[SMOKE] Django image OK')"
                     echo "Django App smoke test passed"
-                """
+                '''
 
                 // FIX: Lua deps check phải dùng GW_IMAGE đã build (KHÔNG dùng base image)
                 // resty.jwt, resty.http, prometheus được cài qua luarocks trong nginx/Dockerfile
                 // base image openresty:alpine-fat KHÔNG có sẵn 3 thư viện này
-                sh """
+                sh '''
                     echo "--- Gateway smoke test: Lua deps (on built image) ---"
                     docker run --rm \\
                         ${GW_IMAGE}:${IMAGE_TAG} \\
@@ -227,7 +227,7 @@ pipeline {
                             print('[SMOKE] All Gateway Lua deps OK')
                         "
                     echo "Gateway smoke test passed"
-                """
+                '''
             }
         }
 
@@ -236,20 +236,20 @@ pipeline {
             steps {
                 echo "🐳 [5/6] Pushing images to DockerHub..."
                 sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
-                sh """
+                sh '''
                     docker push ${APP_IMAGE}:${IMAGE_TAG}
                     docker push ${APP_IMAGE}:latest
                     docker push ${GW_IMAGE}:${IMAGE_TAG}
                     docker push ${GW_IMAGE}:latest
                     echo "All images pushed successfully"
-                """
+                '''
             }
         }
 
         // ── STAGE 6: DEPLOY TO EC2 ────────────────────────────────────────────
         //
         // ROOT CAUSE FIX:
-        //   Dùng heredoc << 'ENDSSH' bên trong sh"""...""" gây lỗi Groovy parse:
+        //   Dùng heredoc << 'ENDSSH' bên trong sh'''...''' gây lỗi Groovy parse:
         //   "illegal string body character after dollar sign"
         //   vì Groovy cố expand ký tự sau $ (kể cả số, dấu nháy, ký tự đặc biệt)
         //
@@ -451,7 +451,7 @@ log "=================================================="
 
                 // Bước 2: SCP lên EC2 rồi chạy
                 sshagent(credentials: [EC2_SSH_CREDS]) {
-                    sh """
+                    sh '''
                         echo "--- Uploading deploy script ---"
                         scp -o StrictHostKeyChecking=no \\
                             -o ConnectTimeout=15 \\
@@ -464,7 +464,7 @@ log "=================================================="
                             -o ServerAliveInterval=10 \\
                             ${EC2_USER}@${EC2_APP_IP} \\
                             "chmod +x /tmp/deploy_remote_${BUILD_NUMBER}.sh && /tmp/deploy_remote_${BUILD_NUMBER}.sh"
-                    """
+                    '''
                 }
             }
 
@@ -474,11 +474,11 @@ log "=================================================="
                     sh 'rm -f deploy_remote.sh || true'
                     // Xóa script tạm trên EC2
                     sshagent(credentials: [EC2_SSH_CREDS]) {
-                        sh """
+                        sh '''
                             ssh -o StrictHostKeyChecking=no \\
                                 ${EC2_USER}@${EC2_APP_IP} \\
                                 "rm -f /tmp/deploy_remote_${BUILD_NUMBER}.sh" 2>/dev/null || true
-                        """
+                        '''
                     }
                 }
             }
@@ -492,13 +492,13 @@ log "=================================================="
         always {
             echo "🧹 Cleaning up Jenkins agent..."
             sh 'docker logout || true'
-            sh """
+            sh '''
                 docker rmi ${APP_IMAGE}:${IMAGE_TAG} 2>/dev/null || true
                 docker rmi ${APP_IMAGE}:latest        2>/dev/null || true
                 docker rmi ${GW_IMAGE}:${IMAGE_TAG}  2>/dev/null || true
                 docker rmi ${GW_IMAGE}:latest         2>/dev/null || true
                 docker image prune -f                 2>/dev/null || true
-            """
+            '''
             // FIX: currentBuild.currentResult là Groovy variable
             // KHÔNG đặt trong sh '''...''' vì single-quote không expand Groovy
             // → dùng script{} block, extract ra biến Groovy trước
@@ -507,7 +507,7 @@ log "=================================================="
                 def jobName  = env.JOB_NAME
                 def buildNo  = env.BUILD_NUMBER
                 def buildUrl = env.BUILD_URL
-                sh """
+                sh '''
                     echo ""
                     echo "========================================"
                     echo " Build Summary"
@@ -516,7 +516,7 @@ log "=================================================="
                     echo " Result : ${result}"
                     echo " URL    : ${buildUrl}"
                     echo "========================================"
-                """
+                '''
             }
         }
 
