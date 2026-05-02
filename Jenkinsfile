@@ -206,9 +206,14 @@ if [ ! -d "${APP_DIR}/.git" ]; then
     git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "${APP_DIR}"
 else
     cd "${APP_DIR}"
+    # FIX: Giành lại quyền sở hữu các file/folder do Docker (root) tạo ra
+    sudo chown -R $USER:$USER "${APP_DIR}" 2>/dev/null || true
+    
     git fetch origin --tags
     git reset --hard origin/main
-    git clean -fd
+    
+    # FIX: Thêm cờ loại trừ thư mục logs để git clean không cố gắng xóa nó
+    git clean -fd -e logs/
 fi
 cd "${APP_DIR}"
 
