@@ -117,7 +117,7 @@ pipeline {
                         openresty -t 2>&1 | tee /tmp/nginx_test.log || true
 
                     # Lọc lỗi thật — bỏ qua DNS/upstream (chỉ xảy ra ngoài Docker network)
-                    REAL_ERRORS=$(grep -E "emerg|alert|crit" /tmp/nginx_test.log \
+                    REAL_ERRORS=$(grep -E '\[emerg\]|\[alert\]|\[crit\]' /tmp/nginx_test.log \
                         | grep -v 'host not found in upstream' \
                         | grep -v 'no resolver defined' \
                         || true)
@@ -134,29 +134,10 @@ pipeline {
                     fi
                 '''
 
-                // --- Kiểm tra Lua deps có trong base image ---
-                sh '''
-                    echo "--- Checking Lua library availability ---"
-                    docker run --rm openresty/openresty:alpine-fat resty -e "
-                        local libs = {
-                            'resty.jwt', 'resty.http', 'resty.redis',
-                            'resty.sha256', 'resty.string',
-                            'resty.limit.req', 'prometheus'
-                        }
-                        local all_ok = true
-                        for _, lib in ipairs(libs) do
-                            local ok, err = pcall(require, lib)
-                            if not ok then
-                                print('MISSING: ' .. lib)
-                                all_ok = false
-                            else
-                                print('OK: ' .. lib)
-                            end
-                        end
-                        if not all_ok then os.exit(1) end
-                        print('All Lua deps present.')
-                    " 2>&1
-                '''
+                // Lua deps check đã được CHUYỂN sang Stage 'Smoke Test'
+                // vì resty.jwt, resty.http, prometheus KHÔNG có trong base image
+                // mà phải được cài qua luarocks trong nginx/Dockerfile khi build
+                // → chỉ có thể verify trên image đã build (GW_IMAGE:IMAGE_TAG)
             }
         }
 
@@ -214,20 +195,35 @@ pipeline {
                     echo "Django App smoke test passed"
                 """
 
-                // Test Gateway image: verify Lua deps bên trong image đã build
+                // FIX: Lua deps check phải dùng GW_IMAGE đã build (KHÔNG dùng base image)
+                // resty.jwt, resty.http, prometheus được cài qua luarocks trong nginx/Dockerfile
+                // base image openresty:alpine-fat KHÔNG có sẵn 3 thư viện này
                 sh """
+                    echo "--- Gateway smoke test: Lua deps (on built image) ---"
                     docker run --rm \\
                         ${GW_IMAGE}:${IMAGE_TAG} \\
                         resty -e "
-                            local ok1 = pcall(require, 'resty.jwt')
-                            local ok2 = pcall(require, 'resty.http')
-                            local ok3 = pcall(require, 'prometheus')
-                            local ok4 = pcall(require, 'resty.redis')
-                            assert(ok1, 'resty.jwt missing')
-                            assert(ok2, 'resty.http missing')
-                            assert(ok3, 'prometheus missing')
-                            assert(ok4, 'resty.redis missing')
-                            print('[SMOKE] Gateway Lua deps OK')
+                            local results = {}
+                            local all_ok = true
+                            local libs = {
+                                'resty.jwt', 'resty.http', 'resty.redis',
+                                'resty.sha256', 'resty.string',
+                                'resty.limit.req', 'prometheus'
+                            }
+                            for _, lib in ipairs(libs) do
+                                local ok, err = pcall(require, lib)
+                                if ok then
+                                    print('OK: ' .. lib)
+                                else
+                                    print('MISSING: ' .. lib .. ' => ' .. tostring(err))
+                                    all_ok = false
+                                end
+                            end
+                            if not all_ok then
+                                print('SMOKE FAILED: missing Lua deps in built image')
+                                os.exit(1)
+                            end
+                            print('[SMOKE] All Gateway Lua deps OK')
                         "
                     echo "Gateway smoke test passed"
                 """
