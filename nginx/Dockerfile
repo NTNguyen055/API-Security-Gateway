@@ -4,14 +4,26 @@ FROM openresty/openresty:alpine-fat
 RUN apk add --no-cache \
     ca-certificates \
     libmaxminddb \
+    openssl \
     && update-ca-certificates
+# (Thêm openssl vào lệnh apk add bên trên)
 
 # ================= DIR =================
 RUN mkdir -p \
     /usr/local/openresty/nginx/lua \
     /usr/local/openresty/nginx/logs \
     /usr/local/openresty/lualib/resty \
-    /etc/nginx/geoip
+    /etc/nginx/geoip \
+    /etc/letsencrypt/live/dacn3.duckdns.org
+# (Thêm thư mục letsencrypt vào lệnh mkdir bên trên)
+
+# ================= DUMMY SSL =================
+# Tạo chứng chỉ giả để pass lệnh test config Nginx trong Jenkins.
+# Khi deploy, volume của Docker sẽ đè chứng chỉ thật lên đường dẫn này.
+RUN openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+    -keyout /etc/letsencrypt/live/dacn3.duckdns.org/privkey.pem \
+    -out /etc/letsencrypt/live/dacn3.duckdns.org/fullchain.pem \
+    -subj "/CN=dacn3.duckdns.org"
 
 # ================= COPY VENDOR =================
 COPY vendor/resty/ /usr/local/openresty/lualib/resty/
@@ -28,9 +40,8 @@ COPY lua/ /usr/local/openresty/nginx/lua/
 RUN chmod -R 755 /usr/local/openresty/
 
 # ================= VERIFY =================
-# Tạm thời comment dòng này lại vì Nginx không thể phân giải hostname "app" 
-# (hoặc các container khác) trong môi trường cô lập lúc build image.
-# RUN /usr/local/openresty/bin/openresty -t
+# Bây giờ bạn có thể tự tin bật lại lệnh này, Nginx sẽ không kêu ca lỗi host hay lỗi SSL nữa!
+RUN /usr/local/openresty/bin/openresty -t
 
 # ================= PORT =================
 EXPOSE 80 443 9145
