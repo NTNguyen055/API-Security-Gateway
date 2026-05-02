@@ -102,6 +102,12 @@ pipeline {
 
                 // --- Validate nginx.conf syntax ---
                 // Dùng sh '''...''' (single-quote) để tránh Groovy expand $()
+                //
+                // LƯU Ý: 'host not found in upstream app' là FALSE-POSITIVE
+                //   openresty -t chạy container độc lập, không có Docker network
+                //   hostname 'app' (docker-compose service) không resolve được
+                //   Khi deploy thật: gateway cùng network 'internal' với 'app' -> OK
+                //   Chỉ fail khi có lỗi cú pháp thật, bỏ qua lỗi DNS/upstream
                 sh '''
                     echo "--- Validating nginx.conf syntax ---"
                     docker run --rm \
@@ -110,10 +116,19 @@ pipeline {
                         openresty/openresty:alpine-fat \
                         openresty -t 2>&1 | tee /tmp/nginx_test.log || true
 
+                    # Lọc lỗi thật — bỏ qua DNS/upstream (chỉ xảy ra ngoài Docker network)
+                    REAL_ERRORS=$(grep -E '\[emerg\]|\[alert\]|\[crit\]' /tmp/nginx_test.log \
+                        | grep -v 'host not found in upstream' \
+                        | grep -v 'no resolver defined' \
+                        || true)
+
                     if grep -q "successful" /tmp/nginx_test.log; then
                         echo "nginx.conf syntax OK"
+                    elif [ -z "$REAL_ERRORS" ]; then
+                        echo "nginx.conf syntax OK (DNS warnings ignored — expected outside Docker network)"
                     else
-                        echo "nginx.conf syntax FAILED"
+                        echo "nginx.conf syntax FAILED — real config errors:"
+                        echo "$REAL_ERRORS"
                         cat /tmp/nginx_test.log
                         exit 1
                     fi
