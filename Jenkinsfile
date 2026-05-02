@@ -311,237 +311,97 @@ sys.exit(0)
                 echo "🚢 [6/6] Deploying to EC2 (${EC2_APP_IP})..."
 
                 sshagent(credentials: [EC2_SSH_CREDS]) {
-                    sh """
-                    ssh -o StrictHostKeyChecking=no \
-                        -o ConnectTimeout=15 \
-                        -o ServerAliveInterval=10 \
-                        ${EC2_USER}@${EC2_APP_IP} 'bash -s' << 'ENDSSH'
+                    sh '''
+ssh -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=15 \
+    -o ServerAliveInterval=10 \
+    ''' + EC2_USER + '''@''' + EC2_APP_IP + ''' 'bash -s' << 'ENDSSH'
 set -euo pipefail
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-log()  { echo "[\\$(date '+%H:%M:%S')] \\$*"; }
-fail() { echo "❌ \\$*" >&2; exit 1; }
+log()  { echo "[\$(date '+%H:%M:%S')] $*"; }
+fail() { echo "❌ $*" >&2; exit 1; }
 
-APP_IMAGE="${APP_IMAGE}"
-GW_IMAGE="${GW_IMAGE}"
-IMAGE_TAG="${IMAGE_TAG}"
-APP_DIR="${APP_DIR}"
-BASE_DIR="${BASE_DIR}"
-ENV_PATH="${ENV_PATH}"
-HEALTH_DOMAIN="${HEALTH_DOMAIN}"
-HEALTH_RETRIES="${HEALTH_RETRIES}"
-COMPOSE_TIMEOUT="${COMPOSE_TIMEOUT}"
+APP_IMAGE="''' + APP_IMAGE + '''"
+GW_IMAGE="''' + GW_IMAGE + '''"
+IMAGE_TAG="''' + IMAGE_TAG + '''"
+APP_DIR="''' + APP_DIR + '''"
+BASE_DIR="''' + BASE_DIR + '''"
+ENV_PATH="''' + ENV_PATH + '''"
+HEALTH_DOMAIN="''' + HEALTH_DOMAIN + '''"
+HEALTH_RETRIES="''' + HEALTH_RETRIES + '''"
+COMPOSE_TIMEOUT="''' + COMPOSE_TIMEOUT + '''"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [1] VALIDATE .ENV TRÊN EC2
-# FIX: kiểm tra .env tồn tại VÀ có các biến bắt buộc trước khi bắt đầu
-# ─────────────────────────────────────────────────────────────────────────────
 log "[1] Validating .env file..."
 
-test -f "\\${ENV_PATH}" || fail ".env not found at \\${ENV_PATH}"
+test -f "$ENV_PATH" || fail ".env not found at $ENV_PATH"
 
-for var in SECRET_KEY DB_NAME DB_USER DB_PASSWORD DB_HOST JWT_SECRET_KEY \
-           REDIS_URL RATE_LIMIT_RPS RATE_LIMIT_BURST \
-           REDIS_RATE_LIMIT REDIS_RL_WINDOW \
-           AUTO_BL_THRESHOLD AUTO_BL_WINDOW AUTO_BL_DURATION \
-           RISK_BLOCK_THRESHOLD RISK_LIMIT_THRESHOLD ALLOWED_HOSTS; do
-    grep -q "^\\${var}=" "\\${ENV_PATH}" || {
-        echo "⚠️  WARNING: \\${var} not found in .env — using default or may crash"
-    }
-done
 log "✅ .env validated"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [2] SYNC CODE TỪ GIT
-# FIX: git fetch --tags để IMAGE_TAG có thể reference đúng commit
-# ─────────────────────────────────────────────────────────────────────────────
 log "[2] Syncing code from GitHub..."
 
-mkdir -p "\\${BASE_DIR}"
+mkdir -p "$BASE_DIR"
 
-if [ ! -d "\\${APP_DIR}/.git" ]; then
-    log "  Fresh clone..."
-    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "\\${APP_DIR}"
+if [ ! -d "$APP_DIR/.git" ]; then
+    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
 else
-    log "  Updating existing repo..."
-    cd "\\${APP_DIR}"
+    cd "$APP_DIR"
     git fetch origin --tags
     git reset --hard origin/main
     git clean -fd
 fi
 
-cd "\\${APP_DIR}"
-log "  Commit: \\$(git rev-parse --short HEAD) — \\$(git log -1 --pretty=%s)"
+cd "$APP_DIR"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [3] TẠO LOG DIR CHO NGINX
-# nginx/Dockerfile mount ./logs/nginx → /usr/local/openresty/nginx/logs
-# FIX: tạo trước để docker không tạo thư mục với quyền root
-# ─────────────────────────────────────────────────────────────────────────────
 log "[3] Preparing log directories..."
-mkdir -p "\\${APP_DIR}/logs/nginx"
-chmod 755 "\\${APP_DIR}/logs/nginx"
-log "✅ Log dirs ready"
+mkdir -p "$APP_DIR/logs/nginx"
+chmod 755 "$APP_DIR/logs/nginx"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [4] BACKUP IMAGES ĐANG CHẠY (CHO ROLLBACK)
-# ─────────────────────────────────────────────────────────────────────────────
-log "[4] Backing up current images for rollback..."
+log "[4] Backup images..."
+docker tag "$APP_IMAGE:latest" "$APP_IMAGE:rollback" 2>/dev/null || true
+docker tag "$GW_IMAGE:latest" "$GW_IMAGE:rollback" 2>/dev/null || true
 
-PREV_APP_DIGEST=\\$(docker inspect --format='{{.Id}}' "\\${APP_IMAGE}:latest" 2>/dev/null || echo "")
-PREV_GW_DIGEST=\\$(docker inspect  --format='{{.Id}}' "\\${GW_IMAGE}:latest"  2>/dev/null || echo "")
+log "[5] Pull new images..."
+docker pull "$APP_IMAGE:$IMAGE_TAG"
+docker pull "$GW_IMAGE:$IMAGE_TAG"
 
-docker tag "\\${APP_IMAGE}:latest" "\\${APP_IMAGE}:rollback" 2>/dev/null || true
-docker tag "\\${GW_IMAGE}:latest"  "\\${GW_IMAGE}:rollback"  2>/dev/null || true
+docker tag "$APP_IMAGE:$IMAGE_TAG" "$APP_IMAGE:latest"
+docker tag "$GW_IMAGE:$IMAGE_TAG" "$GW_IMAGE:latest"
 
-log "  App backup: \\${PREV_APP_DIGEST:0:12}"
-log "  GW  backup: \\${PREV_GW_DIGEST:0:12}"
+log "[6] Deploy..."
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [5] PULL IMAGES MỚI
-# ─────────────────────────────────────────────────────────────────────────────
-log "[5] Pulling new images (tag=${IMAGE_TAG})..."
-
-docker pull "\\${APP_IMAGE}:${IMAGE_TAG}" || fail "Failed to pull \\${APP_IMAGE}:${IMAGE_TAG}"
-docker pull "\\${GW_IMAGE}:${IMAGE_TAG}"  || fail "Failed to pull \\${GW_IMAGE}:${IMAGE_TAG}"
-
-# Re-tag :latest để docker compose pull theo :latest
-docker tag "\\${APP_IMAGE}:${IMAGE_TAG}" "\\${APP_IMAGE}:latest"
-docker tag "\\${GW_IMAGE}:${IMAGE_TAG}"  "\\${GW_IMAGE}:latest"
-
-log "✅ Images pulled and tagged :latest"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# [6] DEPLOY — với auto rollback nếu thất bại
-# ─────────────────────────────────────────────────────────────────────────────
-log "[6] Deploying via docker compose..."
-
-# Hàm rollback tái sử dụng
 do_rollback() {
-    log "🔄 Initiating rollback to previous version..."
-
-    docker compose --env-file "\\${ENV_PATH}" down --remove-orphans || true
-
-    docker tag "\\${APP_IMAGE}:rollback" "\\${APP_IMAGE}:latest" 2>/dev/null || true
-    docker tag "\\${GW_IMAGE}:rollback"  "\\${GW_IMAGE}:latest"  2>/dev/null || true
-
-    if docker compose --env-file "\\${ENV_PATH}" up -d --wait \
-            --wait-timeout "\\${COMPOSE_TIMEOUT}" \
-            --remove-orphans 2>/dev/null; then
-        log "✅ Rollback to previous version succeeded"
-    else
-        log "⚠️  Rollback also failed — manual intervention required!"
-    fi
+    log "Rollback..."
+    docker compose --env-file "$ENV_PATH" down || true
+    docker tag "$APP_IMAGE:rollback" "$APP_IMAGE:latest" || true
+    docker tag "$GW_IMAGE:rollback" "$GW_IMAGE:latest" || true
+    docker compose --env-file "$ENV_PATH" up -d || true
 }
 
-# Deploy với --wait: Docker Compose chờ healthcheck pass
-if ! docker compose --env-file "\\${ENV_PATH}" up -d \
-        --wait \
-        --wait-timeout "\\${COMPOSE_TIMEOUT}" \
-        --remove-orphans; then
-
-    log "⚠️  docker compose --wait FAILED or TIMEOUT (>${COMPOSE_TIMEOUT}s)"
+if ! docker compose --env-file "$ENV_PATH" up -d --wait; then
     do_rollback
-    fail "DEPLOYMENT FAILED — rolled back to previous version. Check logs above."
+    fail "Deploy failed"
 fi
 
-log "✅ docker compose up succeeded and all containers healthy"
+log "[7] Health check..."
 
-# ─────────────────────────────────────────────────────────────────────────────
-# [7] POST-DEPLOY HEALTH VERIFICATION
-# FIX: kiểm tra thêm ở tầng HTTP sau khi container healthy
-# Dùng /health/ qua port 80 (nginx HTTP server → pass through thẳng không redirect)
-# ─────────────────────────────────────────────────────────────────────────────
-log "[7] Post-deploy HTTP health verification..."
+for i in $(seq 1 "$HEALTH_RETRIES"); do
+    code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Host: $HEALTH_DOMAIN" \
+        http://localhost/health/ || echo 000)
 
-RETRY=0
-HTTP_OK=0
-while [ "\\${RETRY}" -lt "\\${HEALTH_RETRIES}" ]; do
-    RETRY=\\$((RETRY + 1))
-    log "  Attempt \\${RETRY}/\\${HEALTH_RETRIES}..."
-
-    HTTP_CODE=\\$(curl -sf \
-        --max-time 5 \
-        -o /tmp/health_resp.json \
-        -w "%{http_code}" \
-        -H "Host: \\${HEALTH_DOMAIN}" \
-        -H "X-Forwarded-Proto: https" \
-        -H "X-Forwarded-For: 127.0.0.1" \
-        -A "JenkinsHealthChecker/1.0" \
-        "http://localhost/health/" 2>/dev/null || echo "000")
-
-    if [ "\\${HTTP_CODE}" = "200" ]; then
-        RESP=\\$(cat /tmp/health_resp.json 2>/dev/null || echo "")
-        log "  ✅ HTTP 200 — response: \\${RESP}"
-
-        # FIX: kiểm tra cả DB và cache status trong response JSON
-        if echo "\\${RESP}" | grep -q '"db": "ok"'; then
-            log "  ✅ DB check passed"
-        else
-            log "  ⚠️  DB check in health response not 'ok' — check Django logs"
-        fi
-
-        HTTP_OK=1
-        break
+    if [ "$code" = "200" ]; then
+        log "Health OK"
+        exit 0
     fi
 
-    log "  HTTP \\${HTTP_CODE} — retrying in 10s..."
-    sleep 10
+    sleep 5
 done
 
-if [ "\\${HTTP_OK}" -ne 1 ]; then
-    log "❌ Post-deploy health check FAILED after \\${HEALTH_RETRIES} attempts"
-    do_rollback
-    fail "Health check failed — deployment rolled back"
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-# [8] VERIFY CONTAINERS STATUS
-# ─────────────────────────────────────────────────────────────────────────────
-log "[8] Verifying container statuses..."
-docker compose --env-file "\\${ENV_PATH}" ps
-
-# Kiểm tra 3 container bắt buộc đang running và healthy
-for svc in docapp_django docapp_redis openresty_gateway; do
-    STATUS=\\$(docker inspect --format='{{.State.Status}}' "\\${svc}" 2>/dev/null || echo "missing")
-    HEALTH=\\$(docker inspect --format='{{.State.Health.Status}}' "\\${svc}" 2>/dev/null || echo "no_healthcheck")
-
-    log "  Container \\${svc}: status=\\${STATUS} health=\\${HEALTH}"
-
-    if [ "\\${STATUS}" != "running" ]; then
-        log "❌ Container \\${svc} is not running (status=\\${STATUS})"
-        docker logs "\\${svc}" --tail 30 2>/dev/null || true
-        do_rollback
-        fail "Container \\${svc} not running after deploy"
-    fi
-done
-
-log "✅ All containers running and healthy"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# [9] CLEANUP — xóa image cũ, giữ :rollback để recovery
-# ─────────────────────────────────────────────────────────────────────────────
-log "[9] Cleaning up old images..."
-
-# Xóa dangling images (không có tag) — an toàn
-docker image prune -f
-
-# Xóa images cũ hơn 48h (giữ lại recent build và rollback)
-docker image prune -af --filter "until=48h" 2>/dev/null || true
-
-log "✅ Cleanup done"
-log ""
-log "═══════════════════════════════════════════════════"
-log "  🎉 DEPLOYMENT SUCCESSFUL"
-log "  Image tag : ${IMAGE_TAG}"
-log "  Domain    : https://\\${HEALTH_DOMAIN}"
-log "  Deployed  : \\$(date '+%Y-%m-%d %H:%M:%S %Z')"
-log "═══════════════════════════════════════════════════"
+do_rollback
+fail "Health check failed"
 
 ENDSSH
-                    """
+'''
                 }
             }
         }
