@@ -29,7 +29,7 @@ RUN openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
 
 # ================= COPY VENDOR =================
 COPY vendor/resty/ /usr/local/openresty/lualib/resty/
-COPY vendor/prometheus.lua /usr/local/openresty/lualib/
+COPY vendor/prometheus*.lua /usr/local/openresty/lualib/
 
 # ================= GEOIP =================
 COPY GeoLite2-Country.mmdb /etc/nginx/geoip/
