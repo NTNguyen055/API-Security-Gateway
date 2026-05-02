@@ -88,12 +88,16 @@ USER appuser
 EXPOSE 8000
 
 # ── HEALTHCHECK ──────────────────────────────────────────────
-# FIX: dùng python thay vì curl — không cần install curl vào image
-# docker-compose.yml cũng override healthcheck này, đồng bộ nhau
+# Thêm header X-Forwarded-Proto: https vào request
+# Để Django không redirect (301) sang HTTPS gây crash urllib
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \
     CMD python -c \
         "import urllib.request; \
-         urllib.request.urlopen('http://localhost:8000/health/')" \
+         req = urllib.request.Request( \
+             'http://localhost:8000/health/', \
+             headers={'X-Forwarded-Proto': 'https', 'Host': 'localhost'} \
+         ); \
+         urllib.request.urlopen(req)" \
     || exit 1
 
 # ── ENTRYPOINT / CMD ──────────────────────────────────────────
