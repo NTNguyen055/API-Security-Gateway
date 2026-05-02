@@ -116,11 +116,12 @@ pipeline {
                         openresty/openresty:alpine-fat \
                         openresty -t 2>&1 | tee /tmp/nginx_test.log || true
 
-                    # Lọc lỗi thật — bỏ qua DNS/upstream (chỉ xảy ra ngoài Docker network)
-                    REAL_ERRORS=$(grep -E '\[emerg\]|\[alert\]|\[crit\]' /tmp/nginx_test.log \
+                    # FIX: escape đúng cho Groovy + Bash
+                    REAL_ERRORS=$( (
+                        grep -E '\\[(emerg|alert|crit)\\]' /tmp/nginx_test.log \
                         | grep -v 'host not found in upstream' \
-                        | grep -v 'no resolver defined' \
-                        || true)
+                        | grep -v 'no resolver defined'
+                    ) || true )
 
                     if grep -q "successful" /tmp/nginx_test.log; then
                         echo "nginx.conf syntax OK"
