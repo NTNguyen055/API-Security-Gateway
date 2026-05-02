@@ -208,13 +208,6 @@ if not _static_dir.exists():
 
 STATICFILES_DIRS = [_static_dir]
 
-# NÂNG CẤP: WhiteNoise compression + caching cho static files
-STATICFILES_STORAGE = (
-    "whitenoise.storage.CompressedManifestStaticFilesStorage"
-    if not (os.getenv("USE_S3", "False") == "True")
-    else "django.contrib.staticfiles.storage.StaticFilesStorage"
-)
-
 MEDIA_URL  = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
@@ -250,7 +243,9 @@ SESSION_ENGINE      = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
 
 # ============================================================
-# AWS S3 (OPTIONAL)
+# AWS S3 (OPTIONAL) & STORAGE BACKENDS (DJANGO 4.2+)
+# FIX: Gom cấu hình lưu trữ vào 1 block STORAGES duy nhất,
+# xóa STATICFILES_STORAGE để không bị lỗi mutually exclusive.
 # ============================================================
 USE_S3 = get_env("USE_S3", "False") == "True"
 
@@ -284,6 +279,18 @@ if USE_S3:
 
     STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
     MEDIA_URL  = f"https://{AWS_S3_CUSTOM_DOMAIN}/media/"
+
+else:
+    # KHI KHÔNG DÙNG S3 (Môi trường local/dev)
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            # NÂNG CẤP: WhiteNoise compression + caching cho static files
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
 
 # ============================================================
 # LOGGING — structured, phân cấp rõ ràng
