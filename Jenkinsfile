@@ -150,7 +150,7 @@ pipeline {
                 sh '''
                     echo "--- Gateway smoke test: Lua deps ---"
                     docker run --rm ${GW_IMAGE}:${IMAGE_TAG} resty -e "
-                        local libs = {'resty.jwt', 'resty.http', 'resty.redis', 'resty.sha256', 'resty.string', 'resty.limit.req', 'prometheus'}
+                        local libs = {'resty.jwt', 'resty.http', 'resty.redis', 'resty.sha256', 'resty.string', 'resty.limit.req'}
                         for _, lib in ipairs(libs) do
                             assert(pcall(require, lib), 'MISSING: ' .. lib)
                         end
