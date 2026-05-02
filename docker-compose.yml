@@ -54,14 +54,8 @@ services:
           --log-level info
       "
 
-    # FIX: dùng python thay vì curl (image Django không đảm bảo có curl)
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
+    # XÓA KHỐI HEALTHCHECK ĐỂ DÙNG HEALTHCHECK CỦA DOCKERFILE
+    # (Đã chứa logic gửi X-Forwarded-Proto)
 
     # NÂNG CẤP: giới hạn tài nguyên để tránh OOM ảnh hưởng toàn hệ thống
     deploy:
