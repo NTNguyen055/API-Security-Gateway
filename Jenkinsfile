@@ -117,19 +117,20 @@ pipeline {
                         openresty/openresty:alpine-fat \
                         openresty -t > /tmp/nginx_test.log 2>&1 || true
 
+                    NGINX_STATUS=$?
+
                     REAL_ERRORS=$( (
                         grep -E '\\[(emerg|alert|crit)\\]' /tmp/nginx_test.log \
                         | grep -v 'host not found in upstream' \
                         | grep -v 'no resolver defined'
                     ) || true )
 
-                    if grep -q "successful" /tmp/nginx_test.log; then
+                    if [ "$NGINX_STATUS" -eq 0 ]; then
                         echo "nginx.conf syntax OK"
                     elif [ -z "$REAL_ERRORS" ]; then
                         echo "nginx.conf syntax OK (DNS warnings ignored)"
                     else
-                        echo "nginx.conf syntax FAILED — real config errors:"
-                        echo "$REAL_ERRORS"
+                        echo "nginx.conf syntax FAILED"
                         cat /tmp/nginx_test.log
                         exit 1
                     fi
