@@ -1,5 +1,6 @@
 // =============================================================================
 // Adaptive Web Security Gateway — Jenkinsfile
+// Pipeline: Checkout → Lint → Build → Smoke Test → Push → Deploy → Verify
 // =============================================================================
 
 pipeline {
