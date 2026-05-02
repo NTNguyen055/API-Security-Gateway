@@ -22,26 +22,21 @@ services:
       redis:
         condition: service_healthy
 
-    # Đảm bảo bind 0.0.0.0:8000 để Nginx có thể gọi tới
+    # FIX: Viết lệnh trên các dòng rõ ràng, đảm bảo bind 0.0.0.0:8000 luôn được thực thi
     command: >
       sh -c "
-        echo '[APP] Waiting for DB migration...' &&
-        until python manage.py migrate --noinput; do
-          echo '[APP] Migration failed, retrying in 5s...' && sleep 5;
-        done &&
-        echo '[APP] Running collectstatic...' &&
-        python manage.py collectstatic --noinput &&
-        echo '[APP] Starting gunicorn...' &&
-        exec gunicorn docappsystem.wsgi:application 
-          --bind 0.0.0.0:8000 
-          --workers 2 
-          --threads 2 
-          --timeout 60 
-          --max-requests 1000 
-          --max-requests-jitter 100 
-          --access-logfile - 
-          --error-logfile - 
-          --log-level info
+      python manage.py migrate --noinput &&
+      python manage.py collectstatic --noinput &&
+      gunicorn docappsystem.wsgi:application 
+      --bind 0.0.0.0:8000 
+      --workers 2 
+      --threads 2 
+      --timeout 60 
+      --max-requests 1000 
+      --max-requests-jitter 100 
+      --access-logfile - 
+      --error-logfile - 
+      --log-level info
       "
 
     deploy:
@@ -129,7 +124,6 @@ services:
       redis:
         condition: service_healthy
 
-    # Healthcheck gọi vào localhost của chính nó (nginx)
     healthcheck:
       test: ["CMD-SHELL", "curl -sf --max-time 4 -H 'Host: dacn3.duckdns.org' -H 'X-Forwarded-Proto: https' http://127.0.0.1/health/ || exit 1"]
       interval: 20s
