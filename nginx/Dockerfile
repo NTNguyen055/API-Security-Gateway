@@ -5,6 +5,7 @@ RUN apk add --no-cache \
     ca-certificates \
     libmaxminddb \
     openssl \
+    curl \
     && update-ca-certificates
 
 # ================= LUA ROCKS (CÀI ĐẶT THƯ VIỆN LUA) =================

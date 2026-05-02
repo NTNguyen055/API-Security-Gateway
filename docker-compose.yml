@@ -153,23 +153,9 @@ services:
       redis:
         condition: service_healthy
 
-    # NÂNG CẤP: healthcheck thêm X-Forwarded-Proto để tránh redirect loop
+    # NÂNG CẤP: healthcheck thêm X-Forwarded-Proto và dùng 127.0.0.1 (tránh lỗi IPv6)
     healthcheck:
-      test:
-        - "CMD"
-        - "curl"
-        - "-sf"
-        - "--max-time"
-        - "4"
-        - "-A"
-        - "HealthChecker/1.0"
-        - "-H"
-        - "Host: dacn3.duckdns.org"
-        - "-H"
-        - "X-Forwarded-For: 127.0.0.1"
-        - "-H"
-        - "X-Forwarded-Proto: https"
-        - "http://localhost/health/"
+      test: ["CMD-SHELL", "curl -sf --max-time 4 -H 'Host: dacn3.duckdns.org' -H 'X-Forwarded-Proto: https' http://127.0.0.1/health/ || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 3
