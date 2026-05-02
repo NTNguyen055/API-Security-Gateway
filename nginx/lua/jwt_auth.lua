@@ -21,17 +21,18 @@ local function get_secret()
     return s
 end
 
--- Public paths không cần JWT — dễ mở rộng
+-- Danh sách các path cụ thể không cần JWT
 local PUBLIC_PATHS = {
-    ["/login"]    = true,
-    ["/login/"]   = true,
-    ["/doLogin"]  = true,
-    ["/doLogin/"] = true,
-    ["/health/"]  = true,
-    ["/health"]   = true,
-    -- NÂNG CẤP: thêm các path public phổ biến
+    ["/"]                = true,
+    ["/login"]           = true,
+    ["/login/"]          = true,
+    ["/doLogin"]         = true,
+    ["/doLogin/"]        = true,
+    ["/health/"]         = true,
+    ["/health"]          = true,
     ["/doctor/signup/"]  = true,
     ["/doctor/signup"]   = true,
+    ["/favicon.ico"]     = true,
 }
 
 -- TTL tối đa cho replay key — tránh cache chiếm quá nhiều bộ nhớ
@@ -58,7 +59,9 @@ function _M.run(ctx)
     end
 
     local uri = ngx.var.uri
-    if PUBLIC_PATHS[uri] then
+    
+    -- NÂNG CẤP: Bỏ qua JWT cho các Public Paths, Static/Media, và Admin Panel
+    if PUBLIC_PATHS[uri] or uri:match("^/static/") or uri:match("^/media/") or uri:match("^/admin/") then
         ctx.security = ctx.security or {}
         ctx.security.jwt_public_path = true
         return
