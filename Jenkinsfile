@@ -111,13 +111,14 @@ pipeline {
                 sh '''
                     echo "--- Validating nginx.conf syntax ---"
 
+                    set +e
                     docker run --rm \
                         -v "$(pwd)/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
                         -v "$(pwd)/nginx/lua:/usr/local/openresty/nginx/lua:ro" \
                         openresty/openresty:alpine-fat \
-                        openresty -t > /tmp/nginx_test.log 2>&1 || true
-
+                        openresty -t > /tmp/nginx_test.log 2>&1
                     NGINX_STATUS=$?
+                    set -e
 
                     REAL_ERRORS=$( (
                         grep -E '\\[(emerg|alert|crit)\\]' /tmp/nginx_test.log \
@@ -130,7 +131,8 @@ pipeline {
                     elif [ -z "$REAL_ERRORS" ]; then
                         echo "nginx.conf syntax OK (DNS warnings ignored)"
                     else
-                        echo "nginx.conf syntax FAILED"
+                        echo "nginx.conf syntax FAILED — real config errors:"
+                        echo "$REAL_ERRORS"
                         cat /tmp/nginx_test.log
                         exit 1
                     fi
