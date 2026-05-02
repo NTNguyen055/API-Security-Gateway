@@ -109,13 +109,13 @@ pipeline {
                 //   Khi deploy thật: gateway cùng network 'internal' với 'app' -> OK
                 //   Chỉ fail khi có lỗi cú pháp thật, bỏ qua lỗi DNS/upstream
                 sh '''
+                    echo "--- Validating nginx.conf syntax ---"
+
                     docker run --rm \
                         -v "$(pwd)/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
                         -v "$(pwd)/nginx/lua:/usr/local/openresty/nginx/lua:ro" \
                         openresty/openresty:alpine-fat \
-                        openresty -t > /tmp/nginx_test.log 2>&1
-
-                    NGINX_STATUS=$?
+                        openresty -t > /tmp/nginx_test.log 2>&1 || true
 
                     REAL_ERRORS=$( (
                         grep -E '\\[(emerg|alert|crit)\\]' /tmp/nginx_test.log \
@@ -123,7 +123,7 @@ pipeline {
                         | grep -v 'no resolver defined'
                     ) || true )
 
-                    if [ "$NGINX_STATUS" -eq 0 ]; then
+                    if grep -q "successful" /tmp/nginx_test.log; then
                         echo "nginx.conf syntax OK"
                     elif [ -z "$REAL_ERRORS" ]; then
                         echo "nginx.conf syntax OK (DNS warnings ignored)"
