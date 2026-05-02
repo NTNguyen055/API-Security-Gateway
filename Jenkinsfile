@@ -117,7 +117,7 @@ pipeline {
                         openresty -t 2>&1 | tee /tmp/nginx_test.log || true
 
                     # Lọc lỗi thật — bỏ qua DNS/upstream (chỉ xảy ra ngoài Docker network)
-                    REAL_ERRORS=$(grep -E "\[emerg\]|\[alert\]|\[crit\]" /tmp/nginx_test.log \
+                    REAL_ERRORS=$(grep -E "emerg|alert|crit" /tmp/nginx_test.log \
                         | grep -v 'host not found in upstream' \
                         | grep -v 'no resolver defined' \
                         || true)
