@@ -128,11 +128,19 @@ pipeline {
 
                     if [ "$NGINX_STATUS" -eq 0 ]; then
                         echo "nginx.conf syntax OK"
-                    elif [ -z "$REAL_ERRORS" ]; then
-                        echo "nginx.conf syntax OK (DNS warnings ignored)"
+
+                    elif grep -q "test failed" /tmp/nginx_test.log; then
+                        if [ -z "$REAL_ERRORS" ]; then
+                            echo "nginx.conf syntax OK (DNS warnings ignored)"
+                        else
+                            echo "nginx.conf syntax FAILED — real config errors:"
+                            echo "$REAL_ERRORS"
+                            cat /tmp/nginx_test.log
+                            exit 1
+                        fi
+
                     else
-                        echo "nginx.conf syntax FAILED — real config errors:"
-                        echo "$REAL_ERRORS"
+                        echo "nginx.conf syntax FAILED (unknown error)"
                         cat /tmp/nginx_test.log
                         exit 1
                     fi
