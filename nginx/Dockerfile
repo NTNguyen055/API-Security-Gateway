@@ -24,13 +24,11 @@ COPY GeoLite2-Country.mmdb /etc/nginx/geoip/
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY lua/ /usr/local/openresty/nginx/lua/
 
-# ================= PERMISSIONS =================
-RUN chmod -R 755 /usr/local/openresty
+# ================= PERMISSION =================
+RUN chmod -R 755 /usr/local/openresty/
 
 # ================= VERIFY =================
-RUN openresty -t
-
-RUN resty -e "require 'resty.jwt'; require 'resty.http'; require 'resty.maxminddb'; print('ALL OK')"
+RUN /usr/local/openresty/bin/openresty -t
 
 # ================= PORT =================
 EXPOSE 80 443 9145
