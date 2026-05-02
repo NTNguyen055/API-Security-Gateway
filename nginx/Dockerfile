@@ -6,7 +6,11 @@ RUN apk add --no-cache \
     libmaxminddb \
     openssl \
     && update-ca-certificates
-# (Thêm openssl vào lệnh apk add bên trên)
+
+# ================= LUA ROCKS (CÀI ĐẶT THƯ VIỆN LUA) =================
+# Cài đặt các thư viện cần thiết mà base image không có sẵn
+RUN luarocks install lua-resty-jwt \
+    && luarocks install lua-resty-http
 
 # ================= DIR =================
 RUN mkdir -p \
@@ -15,11 +19,8 @@ RUN mkdir -p \
     /usr/local/openresty/lualib/resty \
     /etc/nginx/geoip \
     /etc/letsencrypt/live/dacn3.duckdns.org
-# (Thêm thư mục letsencrypt vào lệnh mkdir bên trên)
 
 # ================= DUMMY SSL =================
-# Tạo chứng chỉ giả để pass lệnh test config Nginx trong Jenkins.
-# Khi deploy, volume của Docker sẽ đè chứng chỉ thật lên đường dẫn này.
 RUN openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
     -keyout /etc/letsencrypt/live/dacn3.duckdns.org/privkey.pem \
     -out /etc/letsencrypt/live/dacn3.duckdns.org/fullchain.pem \
@@ -40,7 +41,6 @@ COPY lua/ /usr/local/openresty/nginx/lua/
 RUN chmod -R 755 /usr/local/openresty/
 
 # ================= VERIFY =================
-# Bây giờ bạn có thể tự tin bật lại lệnh này, Nginx sẽ không kêu ca lỗi host hay lỗi SSL nữa!
 RUN /usr/local/openresty/bin/openresty -t
 
 # ================= PORT =================
