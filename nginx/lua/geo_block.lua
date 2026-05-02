@@ -1,8 +1,12 @@
 local _M = {}
 
-local ngx = ngx
+local ngx      = ngx
 local math_min = math.min
+local cjson    = require "cjson.safe"
 
+-- =============================================================================
+-- CONFIG
+-- =============================================================================
 local ALLOWED_COUNTRIES = {
     ["VN"] = true,
     ["US"] = true,
@@ -10,66 +14,133 @@ local ALLOWED_COUNTRIES = {
     ["JP"] = true,
 }
 
-local GEO_CACHE_TTL = 86400
-local GEO_FAIL_TTL  = 60
-local GEO_TIMEOUT   = 500
+local GEO_CACHE_TTL = 86400  -- 24h cho kết quả lookup thành công
+local GEO_FAIL_TTL  = 300    -- NÂNG CẤP: 5 phút (tăng từ 60s) cho lookup fail
+                              -- tránh spam ip-api.com khi API tạm down
+local GEO_TIMEOUT   = 800    -- NÂNG CẤP: 800ms (tăng từ 500ms)
+local GEO_LOCK_TTL  = 10     -- NÂNG CẤP: 10s (tăng từ 5s) để đủ thời gian lookup
 
--- [FIX] Giới hạn số gọi API tối đa để tránh bị ban và treo hệ thống
-local MAX_API_CALLS_PER_MIN = 40
-
+-- =============================================================================
+-- PRIVATE IP CHECK — FIX: dùng số học cho 172.16-31, không dùng | alternation
+-- =============================================================================
 local function is_private_ip(ip)
     if not ip then return false end
 
-    return ip == "127.0.0.1"
-        or ip == "::1"
-        or ip:sub(1,4) == "10."
-        or ip:sub(1,8) == "192.168."
-        or ip:match("^172%.(1[6-9]|2[0-9]|3[01])%.")
+    -- Loopback
+    if ip == "127.0.0.1" or ip == "::1" then return true end
+
+    -- Link-local
+    if ip:match("^169%.254%.") then return true end
+
+    -- RFC-1918
+    if ip:match("^10%.") then return true end
+    if ip:match("^192%.168%.") then return true end
+
+    -- 172.16.0.0/12 — số học thay vì alternation
+    local b = ip:match("^172%.(%d+)%.")
+    if b then
+        local n = tonumber(b)
+        if n and n >= 16 and n <= 31 then return true end
+    end
+
+    return false
 end
 
+-- =============================================================================
+-- GEO LOOKUP — FIX: fail-close thay vì fail-open
+-- Khi lookup thất bại → không cache "A" (allow), giữ nguyên để retry
+-- =============================================================================
 local function lookup_country(ip)
-    local http = require "resty.http"
+    local http  = require "resty.http"
     local httpc = http.new()
 
     httpc:set_timeout(GEO_TIMEOUT)
 
-    local res, err = httpc:request_uri(
-        "http://ip-api.com/json/" .. ip .. "?fields=countryCode,status",
-        { method = "GET", keepalive = true }
-    )
+    local url = "http://ip-api.com/json/" .. ip .. "?fields=countryCode,status"
 
-    if not res or res.status ~= 200 then
-        return nil, err
+    local res, err = httpc:request_uri(url, {
+        method    = "GET",
+        keepalive = true,
+        keepalive_timeout = 60000,
+        keepalive_pool    = 10,
+    })
+
+    if not res then
+        return nil, "http_error:" .. tostring(err)
     end
 
-    local cjson = require "cjson.safe"
+    if res.status ~= 200 then
+        return nil, "http_status:" .. tostring(res.status)
+    end
+
     local data = cjson.decode(res.body)
-
-    if not data or data.status ~= "success" then
-        return "PRIVATE"
+    if not data then
+        return nil, "json_decode_error"
     end
 
-    return data.countryCode
+    if data.status ~= "success" then
+        -- ip-api trả về status != success cho private/reserved IP
+        return "PRIVATE", nil
+    end
+
+    if not data.countryCode or data.countryCode == "" then
+        return nil, "empty_country_code"
+    end
+
+    return data.countryCode, nil
 end
 
+-- =============================================================================
+-- APPLY BLOCK — tập trung logic set ctx khi bị block
+-- =============================================================================
+local function apply_block(ctx, ip, country, from_cache)
+    local base = 25
+    if ctx.security.bad_bot_scanner then base = math_min(base + 10, 100) end
+    if ctx.security.rate_limit_hard  then base = math_min(base + 10, 100) end
+
+    ctx.security.geo_blocked = true
+    ctx.security.geo_country = country
+    ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
+
+    table.insert(ctx.security.signals, "geo_block")
+
+    local src = from_cache and "[CACHE]" or ""
+    ngx.log(ngx.WARN,
+        "[GEO]", src, " BLOCK country=", country,
+        " ip=", ip
+    )
+
+    if metric_blocked then
+        metric_blocked:inc(1, {"geo_block"})
+    end
+end
+
+-- =============================================================================
+-- MAIN
+-- =============================================================================
 function _M.run(ctx)
-    local ip = ngx.var.realip_remote_addr or ngx.var.remote_addr
-    ctx.security = ctx.security or {}
+    -- Ưu tiên client_ip từ xff_guard
+    local ip = (ctx.security and ctx.security.client_ip)
+               or ngx.var.realip_remote_addr
+               or ngx.var.remote_addr
+
+    ctx.security         = ctx.security or {}
     ctx.security.signals = ctx.security.signals or {}
 
+    -- Private IP → skip geo lookup
     if is_private_ip(ip) then
         ctx.security.geo_private = true
         return
     end
 
     local cache = ngx.shared.geo_cache
-
     if not cache then
         ctx.security.geo_cache_missing = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
         return
     end
 
+    -- ── L1 CACHE HIT ─────────────────────────────────────────
     local cached = cache:get(ip)
 
     if cached then
@@ -78,103 +149,65 @@ function _M.run(ctx)
             return
         end
 
-        local country = cached:sub(3)
-
-        ctx.security.geo_blocked = true
-        ctx.security.geo_country = country
-
-        local base = 25
-        if ctx.security.bad_bot_scanner then base = base + 10 end
-        if ctx.security.rate_limit_hard then base = base + 10 end
-
-        ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
-
-        table.insert(ctx.security.signals, "geo_block")
-
-        ngx.log(ngx.WARN,
-            "[GEO][CACHE] Block country=", country,
-            " IP=", ip
-        )
-
-        if metric_blocked then
-            metric_blocked:inc(1, {"geo_block"})
+        if cached == "FAIL" then
+            -- Đang trong fail window → skip, jangan block
+            ctx.security.geo_lookup_pending = true
+            return
         end
 
-        return
-    end
-
-    -- Throttle lookup (chống Dogpile effect cho cùng 1 IP)
-    local lock = cache:add("geo_lock:" .. ip, true, 5)
-    if not lock then
-        return
-    end
-
-    -- [FIX] Áp dụng Circuit Breaker: Kiểm tra xem phút này đã gọi API quá mức chưa
-    local current_min = math.floor(ngx.time() / 60)
-    local api_req_key = "api_req_count:" .. current_min
-    local req_count, err = cache:incr(api_req_key, 1, 0, 60)
-
-    if req_count and req_count > MAX_API_CALLS_PER_MIN then
-        -- Cầu dao ngắt: Fail-open an toàn, không gọi API nữa
-        cache:set(ip, "A", GEO_FAIL_TTL)
-        ctx.security.geo_allowed = true
-        
-        if req_count == MAX_API_CALLS_PER_MIN + 1 then
-            ngx.log(ngx.WARN, "[GEO] CIRCUIT BREAKER TRIPPED! API calls > ", MAX_API_CALLS_PER_MIN, "/min. Defaulting to ALLOW.")
+        -- Format: "B:<countryCode>"
+        if cached:sub(1, 2) == "B:" then
+            local country = cached:sub(3)
+            apply_block(ctx, ip, country, true)
         end
         return
     end
 
+    -- ── LOCK để chỉ 1 request lookup API cùng lúc cho mỗi IP ─
+    -- FIX: dùng số 1 thay vì boolean
+    local lock_key = "geo_lock:" .. ip
+    local locked, _ = cache:add(lock_key, 1, GEO_LOCK_TTL)
+
+    if not locked then
+        -- Request khác đang lookup → bỏ qua geo check cho request này
+        -- (an toàn hơn là block nhầm)
+        ctx.security.geo_lookup_pending = true
+        return
+    end
+
+    -- ── API LOOKUP ────────────────────────────────────────────
     local country, err = lookup_country(ip)
 
+    -- FIX: Fail-close — khi lỗi KHÔNG cache "A"
+    -- Thay vào đó cache "FAIL" để các request trong GEO_FAIL_TTL
+    -- biết đang trong fail window, không spam API
     if not country then
-        cache:set(ip, "A", GEO_FAIL_TTL)
+        cache:set(ip, "FAIL", GEO_FAIL_TTL)
 
         ctx.security.geo_lookup_fail = true
 
         local base = 5
-        if ctx.security.rate_limit_hard then base = base + 10 end
-
+        if ctx.security.rate_limit_hard then base = math_min(base + 10, 100) end
         ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
 
         ngx.log(ngx.WARN,
-            "[GEO] Lookup failed IP=", ip,
-            " err=", err
+            "[GEO] Lookup failed ip=", ip,
+            " err=", tostring(err)
         )
-
         return
     end
 
+    -- Private hoặc country được phép
     if country == "PRIVATE" or ALLOWED_COUNTRIES[country] then
         cache:set(ip, "A", GEO_CACHE_TTL)
-
         ctx.security.geo_allowed = true
         ctx.security.geo_country = country
-
         return
     end
 
+    -- Bị chặn
     cache:set(ip, "B:" .. country, GEO_CACHE_TTL)
-
-    ctx.security.geo_blocked = true
-    ctx.security.geo_country = country
-
-    local base = 25
-    if ctx.security.bad_bot_scanner then base = base + 10 end
-    if ctx.security.rate_limit_hard then base = base + 10 end
-
-    ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
-
-    table.insert(ctx.security.signals, "geo_block")
-
-    ngx.log(ngx.WARN,
-        "[GEO] Block country=", country,
-        " IP=", ip
-    )
-
-    if metric_blocked then
-        metric_blocked:inc(1, {"geo_block"})
-    end
+    apply_block(ctx, ip, country, false)
 end
 
 return _M

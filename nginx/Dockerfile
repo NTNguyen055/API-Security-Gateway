@@ -1,85 +1,53 @@
-# =============================================================================
-# Adaptive API Security Gateway — FINAL FIXED BUILD
-# =============================================================================
+FROM openresty/openresty:alpine-fat
 
-FROM openresty/openresty:1.25.3.2-alpine-fat
-
-# ================= BASE =================
+# ================= BASE & C-LIBRARIES =================
 RUN apk add --no-cache \
+    git \
     curl \
     ca-certificates \
-    openssl \
-    openssl-dev \
- && update-ca-certificates
+    libmaxminddb \
+    libmaxminddb-dev \
+    && update-ca-certificates
 
-ENV LUA_PATH="/usr/local/openresty/lualib/?.lua;;"
-
-# ================= DIR =================
-RUN mkdir -p /usr/local/openresty/nginx/lua \
- && mkdir -p /usr/local/openresty/lualib/resty
-
-# =============================================================================
-# 🔒 INSTALL LUA MODULES (PRODUCTION-GRADE DETERMINISTIC BUILD)
-# =============================================================================
-RUN set -eux && \
-# 1. lua-resty-http (v0.17.2)
-curl -fL https://github.com/ledgetech/lua-resty-http/archive/refs/tags/v0.17.2.tar.gz | tar -xz && \
-cp -r lua-resty-http-0.17.2/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 2. lua-resty-redis (v0.29)
-curl -fL https://github.com/openresty/lua-resty-redis/archive/refs/tags/v0.29.tar.gz | tar -xz && \
-cp -r lua-resty-redis-0.29/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 3. lua-resty-limit-traffic (v0.08)
-curl -fL https://github.com/openresty/lua-resty-limit-traffic/archive/refs/tags/v0.08.tar.gz | tar -xz && \
-cp -r lua-resty-limit-traffic-0.08/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 4. lua-resty-string (v0.15)
-curl -fL https://github.com/openresty/lua-resty-string/archive/refs/tags/v0.15.tar.gz | tar -xz && \
-cp -r lua-resty-string-0.15/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 5. lua-resty-jwt (Locked bằng commit hash ee1d024 - Bất biến vĩnh viễn)
-curl -fL https://github.com/SkyLothar/lua-resty-jwt/archive/ee1d024.tar.gz | tar -xz && \
-cp -r lua-resty-jwt-ee1d024*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 6. lua-resty-hmac (Locked bằng commit hash 23da759 - Bất biến vĩnh viễn)
-curl -fL https://github.com/jkeys089/lua-resty-hmac/archive/23da759.tar.gz | tar -xz && \
-cp -r lua-resty-hmac-23da759*/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 7. lua-resty-openssl (1.7.1)
-curl -fL https://github.com/fffonion/lua-resty-openssl/archive/refs/tags/1.7.1.tar.gz | tar -xz && \
-cp -r lua-resty-openssl-1.7.1/lib/resty/* /usr/local/openresty/lualib/resty/ && \
-# 8. nginx-lua-prometheus (0.20240525 - SỬ DỤNG *.lua ĐỂ COPY TOÀN BỘ)
-curl -fL https://github.com/knyar/nginx-lua-prometheus/archive/refs/tags/0.20240525.tar.gz | tar -xz && \
-cp nginx-lua-prometheus-*/*.lua /usr/local/openresty/lualib/ && \
-# Cleanup
-rm -rf lua-resty-* nginx-lua-prometheus-*
-
-# =============================================================================
-# 🧪 VERIFY
-# =============================================================================
-RUN /usr/local/openresty/bin/resty -e "\
-require 'cjson'; \
-require 'resty.redis'; \
-require 'resty.http'; \
-require 'resty.jwt'; \
-require 'resty.hmac'; \
-require 'resty.sha256'; \
-require 'resty.limit.req'; \
-require 'resty.openssl.x509.chain'; \
-require 'prometheus'; \
-print('ALL MODULES OK'); \
-"
-
-# =============================================================================
-# CONFIG
-# =============================================================================
-COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
-COPY lua/       /usr/local/openresty/nginx/lua/
-
-# =============================================================================
-# PERMISSIONS
-# =============================================================================
-RUN chmod -R 755 /usr/local/openresty/lualib \
- && chmod -R 755 /usr/local/openresty/nginx/lua \
+# ================= LUA DIR =================
+RUN mkdir -p /usr/local/openresty/lualib/resty \
+ && mkdir -p /usr/local/openresty/nginx/lua \
  && mkdir -p /usr/local/openresty/nginx/logs
-    
-# =============================================================================
-# RUN
-# =============================================================================
-EXPOSE 80 443
+
+# ================= LUA MODULES (LUAROCKS) =================
+# FIX 1: bỏ version cứng lua-resty-hmac (0.05-0 thường fail trên alpine-fat)
+# FIX 2: thêm lua-resty-string (dependency thực tế của lua-resty-jwt trên OpenResty)
+RUN luarocks install lua-resty-jwt 0.2.3-0 \
+ && luarocks install lua-resty-http 0.17.2-0 \
+ && luarocks install lua-resty-hmac \
+ && luarocks install lua-resty-string \
+ && luarocks install nginx-lua-prometheus 0.20230617-1 \
+ && luarocks install lua-resty-maxminddb
+
+# ================= GEOIP DATABASE =================
+RUN mkdir -p /etc/nginx/geoip/
+COPY GeoLite2-Country.mmdb /etc/nginx/geoip/GeoLite2-Country.mmdb
+
+# ================= CONFIG =================
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+COPY lua/ /usr/local/openresty/nginx/lua/
+
+# ================= PERMISSIONS =================
+# FIX 3: chmod cả lua/ custom scripts (không chỉ lualib)
+RUN chmod -R 755 /usr/local/openresty/lualib \
+ && chmod -R 755 /usr/local/openresty/nginx/lua
+
+# ================= VERIFY =================
+# FIX 4: verify nginx config hợp lệ ngay lúc build
+RUN /usr/local/openresty/bin/openresty -t
+
+# Kiểm tra các Lua module cốt lõi load thành công
+RUN /usr/local/openresty/bin/resty \
+    -e "require 'cjson'; require 'resty.maxminddb'; require 'resty.jwt'; print('ALL LUA MODULES LOADED OK')"
+
+# ================= PORT =================
+# FIX 5: thêm 9145 cho Prometheus metrics (docker-compose expose 127.0.0.1:9145:9145)
+EXPOSE 80 443 9145
+
+# ================= RUN =================
 CMD ["openresty", "-g", "daemon off;"]

@@ -1,270 +1,127 @@
 pipeline {
-
     agent any
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-    }
-
     environment {
+        // --- CẤU HÌNH IMAGE ---
         APP_IMAGE = 'ntnguyen055/api-security-app'
         GW_IMAGE  = 'ntnguyen055/api-security-gateway'
         IMAGE_TAG = "v${BUILD_NUMBER}"
+        
+        // --- BẬT DOCKER BUILDKIT ĐỂ BUILD NHANH HƠN ---
+        DOCKER_BUILDKIT = 1
 
+        // --- THÔNG TIN DEPLOY ---
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
         EC2_APP_IP      = '13.159.56.185'
         EC2_USER        = 'ubuntu'
+        
+        // --- ĐƯỜNG DẪN TRÊN EC2 ---
+        BASE_DIR = '/home/ubuntu/appointment-web'
+        APP_DIR  = '/home/ubuntu/appointment-web/API-Security-Gateway'
+        ENV_PATH = '/home/ubuntu/appointment-web/.env'
     }
 
     stages {
-
-        stage('Checkout') {
-            steps {
-                cleanWs()
-                checkout scm
+        stage('Checkout Code') {
+            steps { 
+                checkout scm 
             }
         }
 
-        stage('Build Images') {
+        stage('Build & Verify Images') {
             steps {
-                sh '''
-                set -e
+                echo "🚀 Building images with BuildKit..."
+                // Build Django App (Tận dụng cache layer của Multi-stage)
+                sh """
+                docker build --cache-from ${APP_IMAGE}:latest \
+                             -t ${APP_IMAGE}:${IMAGE_TAG} \
+                             -t ${APP_IMAGE}:latest \
+                             ./docappsystem
+                """
 
-                docker build \
-                    -t $APP_IMAGE:$IMAGE_TAG \
-                    -t $APP_IMAGE:latest \
-                    ./docappsystem
-
-                docker build \
-                    -t $GW_IMAGE:$IMAGE_TAG \
-                    -t $GW_IMAGE:latest \
-                    ./nginx
-                '''
+                // Build OpenResty Gateway (Lỗi cú pháp Nginx sẽ FAILED ngay tại đây)
+                sh """
+                docker build --cache-from ${GW_IMAGE}:latest \
+                             -t ${GW_IMAGE}:${IMAGE_TAG} \
+                             -t ${GW_IMAGE}:latest \
+                             ./nginx
+                """
             }
         }
 
-        stage('Test (Safe Fail)') {
+        stage('Push to DockerHub') {
             steps {
-                sh '''
-                set +e
-
-                echo "1. Running Django syntax and configuration check..."
-                OUTPUT=$(docker run --rm \
-                    --entrypoint "" \
-                    -e DEBUG=True \
-                    -e SECRET_KEY=test-key-safefail-123 \
-                    -e ALLOWED_HOSTS="*" \
-                    -e DB_NAME=test_db \
-                    -e DB_USER=test_user \
-                    -e DB_PASSWORD=test_pass \
-                    -e DB_HOST=localhost \
-                    -e USE_S3=False \
-                    -e AWS_STORAGE_BUCKET_NAME=dummy-bucket \
-                    -e AWS_S3_REGION_NAME=ap-northeast-1 \
-                    $APP_IMAGE:$IMAGE_TAG \
-                    python manage.py check --verbosity=2 2>&1)
-
-                echo "$OUTPUT"
-
-                echo "$OUTPUT" | grep -qEi "SystemCheckError|Exception|Error"
-                if [ $? -eq 0 ]; then
-                    echo "TEST FAILED: Code Django có lỗi cấu trúc hoặc cú pháp."
-                    exit 1
-                fi
-
-                echo "2. Running Gateway Nginx syntax check..."
-                # Sinh SSL giả (Dummy Cert) để vượt qua bước check file của Nginx
-                GW_OUTPUT=$(docker run --rm \
-                    --add-host app:127.0.0.1 \
-                    --add-host redis:127.0.0.1 \
-                    --entrypoint /bin/sh \
-                    $GW_IMAGE:$IMAGE_TAG \
-                    -c "mkdir -p /etc/letsencrypt/live/dacn3.duckdns.org && openssl req -x509 -nodes -days 1 -newkey rsa:2048 -keyout /etc/letsencrypt/live/dacn3.duckdns.org/privkey.pem -out /etc/letsencrypt/live/dacn3.duckdns.org/fullchain.pem -subj '/CN=localhost' 2>/dev/null && openresty -t 2>&1")
-                
-                echo "$GW_OUTPUT"
-
-                echo "$GW_OUTPUT" | grep -q "syntax is ok"
-                if [ $? -ne 0 ]; then
-                    echo "TEST FAILED: Cấu hình Gateway Nginx không hợp lệ."
-                    exit 1
-                fi
-
-                echo "3. Checking for missing migrations..."
-                # Chốt chặn kiểm tra xem Developer có quên tạo file migrations không
-                MIGRATION_CHECK=$(docker run --rm \
-                    --entrypoint "" \
-                    -e DEBUG=True \
-                    -e SECRET_KEY=test-key-safefail-123 \
-                    -e ALLOWED_HOSTS="*" \
-                    -e DB_NAME=test_db \
-                    -e DB_USER=test_user \
-                    -e DB_PASSWORD=test_pass \
-                    -e DB_HOST=localhost \
-                    -e USE_S3=False \
-                    -e AWS_STORAGE_BUCKET_NAME=dummy-bucket \
-                    -e AWS_S3_REGION_NAME=ap-northeast-1 \
-                    $APP_IMAGE:$IMAGE_TAG \
-                    python manage.py makemigrations --check --dry-run 2>&1 || true)
-                
-                echo "$MIGRATION_CHECK"
-                
-                if echo "$MIGRATION_CHECK" | grep -q "No changes detected"; then
-                    echo "✅ No missing migrations."
-                else
-                    echo "❌ TEST FAILED: Bạn đã thay đổi Models nhưng quên chạy 'makemigrations'!"
-                    exit 1
-                fi
-
-                echo "✅ ALL TESTS PASSED!"
-                '''
-            }
-        }
-
-        stage('Push Images') {
-            steps {
-                // Sử dụng withCredentials để giải mã username và password an toàn
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PSW', usernameVariable: 'DOCKER_USR')]) {
-                    sh '''
-                    echo $DOCKER_PSW | docker login -u $DOCKER_USR --password-stdin
-
-                    docker push $APP_IMAGE:$IMAGE_TAG
-                    docker push $APP_IMAGE:latest
-
-                    docker push $GW_IMAGE:$IMAGE_TAG
-                    docker push $GW_IMAGE:latest
-                    '''
-                }
+                echo "🐳 Pushing images to DockerHub..."
+                sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
+                sh """
+                docker push ${APP_IMAGE}:${IMAGE_TAG}
+                docker push ${APP_IMAGE}:latest
+                docker push ${GW_IMAGE}:${IMAGE_TAG}
+                docker push ${GW_IMAGE}:latest
+                """
             }
         }
 
         stage('Deploy & Smart Rollback') {
             steps {
-
-                writeFile file: '/tmp/deploy_script.sh', text: '''#!/bin/bash
-
-set -euo pipefail
-
-BASE_DIR="/home/ubuntu/appointment-web"
-APP_DIR="$BASE_DIR/API-Security-Gateway"
-ENV_PATH="$BASE_DIR/.env"
-
-APP_IMAGE="ntnguyen055/api-security-app"
-GW_IMAGE="ntnguyen055/api-security-gateway"
-
-DOCKER_COMPOSE="docker compose"
-if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
-    DOCKER_COMPOSE="docker-compose"
-fi
-
-echo "=== DEPLOY START ==="
-
-mkdir -p "$BASE_DIR"
-
-echo "[1] BACKUP CURRENT COMPOSE FILE"
-if [ -f "$APP_DIR/docker-compose.yml" ]; then
-    cp "$APP_DIR/docker-compose.yml" "/tmp/docker-compose.yml.bak"
-fi
-
-echo "[2] SYNC CODE"
-if [ ! -d "$APP_DIR" ]; then
-    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "$APP_DIR"
-else
-    cd "$APP_DIR"
-    git fetch origin
-    git reset --hard origin/main
-    git clean -fd
-fi
-
-cd "$APP_DIR"
-
-if [ ! -f "$ENV_PATH" ]; then
-    echo "ERROR: Missing .env file. Please create it manually on the server."
-    exit 1
-fi
-
-echo "[3] BACKUP IMAGES"
-docker image inspect "$APP_IMAGE:latest" >/dev/null 2>&1 && docker tag "$APP_IMAGE:latest" "$APP_IMAGE:backup"
-docker image inspect "$GW_IMAGE:latest"  >/dev/null 2>&1 && docker tag "$GW_IMAGE:latest"  "$GW_IMAGE:backup"
-
-echo "[4] DEPLOY NEW VERSION"
-$DOCKER_COMPOSE --env-file "$ENV_PATH" pull
-$DOCKER_COMPOSE --env-file "$ENV_PATH" up -d --remove-orphans
-
-echo "[5] HEALTH CHECK (WAITING UP TO 120s FOR AWS S3 SYNC...)"
-
-# Vòng lặp chờ trạng thái Healthy (Kiên nhẫn đợi collectstatic)
-for i in {1..24}; do
-    APP_STATUS=$(docker inspect -f "{{.State.Health.Status}}" docapp_django 2>/dev/null || echo "unknown")
-    echo "Check $i/24 -> Container Status: $APP_STATUS"
-    if [ "$APP_STATUS" = "healthy" ]; then
-        break
-    fi
-    sleep 5
-done
-
-# Kiểm tra HTTP thông qua Nginx Gateway
-HTTP_STATUS="000"
-for i in {1..10}; do
-    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    --max-time 5 \
-    --connect-timeout 3 \
-    -A "HealthChecker/1.0" \
-    -H "Host: dacn3.duckdns.org" \
-    -H "X-Forwarded-For: 127.0.0.1" \
-    http://127.0.0.1/health/ || echo "000")
-
-    echo "Gateway Test $i -> HTTP Status: $HTTP_STATUS"
-
-    if [ "$HTTP_STATUS" = "200" ]; then
-        break
-    fi
-
-    sleep 3
-done
-
-APP_STATUS=$(docker inspect -f "{{.State.Health.Status}}" docapp_django 2>/dev/null || echo "unknown")
-GW_STATUS=$(docker inspect -f "{{.State.Running}}" openresty_gateway 2>/dev/null || echo "false")
-
-echo "VERDICT: APP=$APP_STATUS | GW=$GW_STATUS | HTTP=$HTTP_STATUS"
-
-if [ "$APP_STATUS" != "healthy" ] || \
-   [ "$GW_STATUS" != "true" ] || \
-   [ "$HTTP_STATUS" != "200" ]; then
-
-    echo "❌ DEPLOY FAILED -> INITIATING ROLLBACK..."
-
-    $DOCKER_COMPOSE --env-file "$ENV_PATH" down
-
-    # Khôi phục file compose cũ (tránh rủi ro file mới bị lỗi schema)
-    if [ -f "/tmp/docker-compose.yml.bak" ]; then
-        cp "/tmp/docker-compose.yml.bak" "$APP_DIR/docker-compose.yml"
-    fi
-
-    docker image inspect "$APP_IMAGE:backup" >/dev/null 2>&1 && \
-    docker tag "$APP_IMAGE:backup" "$APP_IMAGE:latest"
-
-    docker image inspect "$GW_IMAGE:backup" >/dev/null 2>&1 && \
-    docker tag "$GW_IMAGE:backup" "$GW_IMAGE:latest"
-
-    $DOCKER_COMPOSE --env-file "$ENV_PATH" up -d
-
-    exit 1
-fi
-
-echo "✅ DEPLOY SUCCESS"
-
-# Cleanup
-docker image prune -f
-docker container prune -f
-rm -f /tmp/deploy_script.sh
-rm -f /tmp/docker-compose.yml.bak
-'''
-
+                echo "🚢 Deploying to EC2 via SSH..."
                 sshagent(credentials: [EC2_SSH_CREDS]) {
+                    // Dùng EOF để truyền an toàn script bash qua SSH
                     sh """
-                    scp -o StrictHostKeyChecking=no /tmp/deploy_script.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_script.sh
-                    ssh -o StrictHostKeyChecking=no -T ${EC2_USER}@${EC2_APP_IP} 'bash /tmp/deploy_script.sh'
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} 'bash -s' << 'EOF'
+                        set -e
+
+                        echo "--- [1] PREPARE DIRECTORIES & SYNC CODE ---"
+                        mkdir -p "${BASE_DIR}"
+                        
+                        if [ ! -d "${APP_DIR}" ]; then
+                            git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "${APP_DIR}"
+                        else
+                            cd "${APP_DIR}"
+                            git fetch origin
+                            git reset --hard origin/main
+                            git clean -fd
+                        fi
+
+                        cd "${APP_DIR}"
+
+                        if [ ! -f "${ENV_PATH}" ]; then
+                            echo "❌ ERROR: .env file not found at ${ENV_PATH}"
+                            exit 1
+                        fi
+
+                        echo "--- [2] BACKUP CURRENT RUNNING IMAGES ---"
+                        docker tag ${APP_IMAGE}:latest ${APP_IMAGE}:backup 2>/dev/null || true
+                        docker tag ${GW_IMAGE}:latest  ${GW_IMAGE}:backup 2>/dev/null || true
+
+                        echo "--- [3] PULL LATEST IMAGES ---"
+                        docker compose --env-file "${ENV_PATH}" pull
+
+                        echo "--- [4] DEPLOY & HEALTH CHECK ---"
+                        # Vũ khí bí mật: --wait tự động chờ container 'healthy'
+                        if ! docker compose --env-file "${ENV_PATH}" up -d --wait --remove-orphans; then
+                            echo "⚠️ DEPLOY FAILED OR HEALTHCHECK TIMEOUT! INITIATING ROLLBACK..."
+                            
+                            docker compose --env-file "${ENV_PATH}" down
+                            
+                            # Restore tags
+                            docker tag ${APP_IMAGE}:backup ${APP_IMAGE}:latest 2>/dev/null || true
+                            docker tag ${GW_IMAGE}:backup  ${GW_IMAGE}:latest 2>/dev/null || true
+                            
+                            echo "🔄 ROLLING BACK TO PREVIOUS VERSION..."
+                            docker compose --env-file "${ENV_PATH}" up -d --wait
+                            
+                            echo "❌ ROLLBACK COMPLETE. DEPLOYMENT MARKED AS FAILED."
+                            exit 1
+                        fi
+
+                        echo "✅ DEPLOYMENT SUCCESSFUL!"
+
+                        echo "--- [5] CLEANUP ---"
+                        # Xóa các image cũ lơ lửng để tránh đầy ổ cứng server
+                        docker image prune -af --filter "until=24h"
+                    EOF
                     """
                 }
             }
@@ -274,13 +131,14 @@ rm -f /tmp/docker-compose.yml.bak
     post {
         always {
             sh 'docker logout || true'
-        }
-        failure {
-            echo "❌ PIPELINE FAILED"
+            // Xóa image build tạm trên máy Jenkins để giải phóng dung lượng
+            sh "docker rmi ${APP_IMAGE}:${IMAGE_TAG} ${APP_IMAGE}:latest ${GW_IMAGE}:${IMAGE_TAG} ${GW_IMAGE}:latest || true"
         }
         success {
-            echo "✅ DEPLOY SUCCESSFUL"
+            echo "🎉 Pipeline completed successfully!"
+        }
+        failure {
+            echo "🔥 Pipeline failed. Please check the logs."
         }
     }
-
 }

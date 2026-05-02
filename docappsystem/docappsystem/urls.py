@@ -1,93 +1,175 @@
 from django.contrib import admin
-from django.urls import path
-from django.conf.urls.static import static
+from django.urls import path, include
 from django.conf import settings
 from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
-# Import các views
+# Import views
 from . import views, adminviews, docviews, userviews
 
+
 # ============================================================
-# HEALTH CHECK (OPTIMIZED FOR GATEWAY + DOCKER + JENKINS)
+# HEALTH CHECK
+# FIX: chỉ cho phép GET, thêm DB + cache check để healthcheck
+#      thực sự phản ánh tình trạng hệ thống
 # ============================================================
 @csrf_exempt
+@require_http_methods(["GET"])
 def health_check(request):
-    return JsonResponse({"status": "ok"}, status=200)
+    """
+    Lightweight health check cho Docker, gateway, và Jenkins.
+    Kiểm tra DB connection và Redis cache.
+    Trả về 200 nếu tất cả healthy, 503 nếu có component down.
+    """
+    checks = {}
+    healthy = True
 
+    # Kiểm tra DB
+    try:
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"error: {type(e).__name__}"
+        healthy = False
+
+    # Kiểm tra Redis cache
+    try:
+        from django.core.cache import cache
+        cache.set("_health_ping", "1", timeout=5)
+        val = cache.get("_health_ping")
+        checks["cache"] = "ok" if val == "1" else "miss"
+        if val != "1":
+            healthy = False
+    except Exception as e:
+        checks["cache"] = f"error: {type(e).__name__}"
+        # Cache down không critical — vẫn healthy nhưng warn
+        checks["cache_warn"] = True
+
+    status_code = 200 if healthy else 503
+    return JsonResponse(
+        {"status": "ok" if healthy else "degraded", "checks": checks},
+        status=status_code,
+    )
+
+
+# ============================================================
+# URL PATTERNS
+# ============================================================
 urlpatterns = [
 
-    # =========================================================
-    # PUBLIC (NO JWT REQUIRED)
-    # =========================================================
-    path('login/', views.LOGIN, name='login'),
-    path('doLogin/', views.doLogin, name='doLogin'),
-    
-    # Đảm bảo match cả /health và /health/ để tránh 301 Redirect Loop
-    path('health/', health_check, name='health'),
-    path('health', health_check),
+    # ── PUBLIC (không cần JWT) ───────────────────────────────
+    path("login/",   views.LOGIN,   name="login"),
+    path("doLogin/", views.doLogin, name="doLogin"),
 
-    # =========================================================
-    # BASE / USER
-    # =========================================================
-    path('', userviews.Index, name='index'),
-    path('base/', views.BASE, name='base'),
-    path('userbase/', userviews.USERBASE, name='userbase'),
+    # Health check — match cả /health/ và /health (tránh redirect 301)
+    path("health/", health_check, name="health"),
+    path("health",  health_check),
 
-    path('userappointment/', userviews.create_appointment, name='appointment'),
-    path('User_SearchAppointment/', userviews.User_Search_Appointments, name='user_search_appointment'),
-    path('ViewAppointmentDetails/<str:id>/', userviews.View_Appointment_Details, name='viewappointmentdetails'),
+    # Doctor signup — public
+    path("doctor/signup/", docviews.DOCSIGNUP, name="docsignup"),
 
-    # =========================================================
-    # PROFILE
-    # =========================================================
-    path('profile/', views.PROFILE, name='profile'),
-    path('profile/update/', views.PROFILE_UPDATE, name='profile_update'),
-    path('password/', views.CHANGE_PASSWORD, name='change_password'),
+    # ── BASE / USER ──────────────────────────────────────────
+    path("",          userviews.Index,   name="index"),
+    path("base/",     views.BASE,        name="base"),
+    path("userbase/", userviews.USERBASE, name="userbase"),
 
-    # =========================================================
-    # ADMIN PANEL
-    # =========================================================
-    path('admin/', admin.site.urls),
+    path("userappointment/",
+         userviews.create_appointment, name="appointment"),
+    path("User_SearchAppointment/",
+         userviews.User_Search_Appointments, name="user_search_appointment"),
 
-    path('admin/home/', adminviews.ADMINHOME, name='admin_home'),
-    path('admin/specialization/', adminviews.SPECIALIZATION, name='add_specilizations'),
-    path('admin/manage-specialization/', adminviews.MANAGESPECIALIZATION, name='manage_specilizations'),
-    path('admin/delete-specialization/<str:id>/', adminviews.DELETE_SPECIALIZATION, name='delete_specilizations'),
-    path('admin/update-specialization/<str:id>/', adminviews.UPDATE_SPECIALIZATION, name='update_specilizations'),
-    path('admin/update-specialization-details/', adminviews.UPDATE_SPECIALIZATION_DETAILS, name='update_specilizations_details'),
+    # NÂNG CẤP: <int:id> thay vì <str:id> — type-safe, tránh injection
+    path("ViewAppointmentDetails/<int:id>/",
+         userviews.View_Appointment_Details, name="viewappointmentdetails"),
 
-    path('admin/doctor-list/', adminviews.DoctorList, name='viewdoctorlist'),
-    path('admin/view-doctor-details/<str:id>/', adminviews.ViewDoctorDetails, name='viewdoctordetails'),
-    path('admin/view-doctor-appointments/<str:id>/', adminviews.ViewDoctorAppointmentList, name='viewdoctorappointmentlist'),
-    path('admin/view-patient-details/<str:id>/', adminviews.ViewPatientDetails, name='viewpatientdetails'),
+    # ── PROFILE ──────────────────────────────────────────────
+    path("profile/",         views.PROFILE,          name="profile"),
+    path("profile/update/",  views.PROFILE_UPDATE,   name="profile_update"),
+    path("password/",        views.CHANGE_PASSWORD,  name="change_password"),
 
-    path('admin/search-doctor/', adminviews.Search_Doctor, name='search_doctor'),
-    path('admin/doctor-report/', adminviews.Doctor_Between_Date_Report, name='doctor_between_date_report'),
+    # ── DJANGO ADMIN ─────────────────────────────────────────
+    # /admin/ được nginx.conf xử lý với security pipeline riêng
+    path("admin/", admin.site.urls),
 
-    path('admin/website/update/', adminviews.WEBSITE_UPDATE, name='website_update'),
-    path('admin/website/update-details/', adminviews.UPDATE_WEBSITE_DETAILS, name='update_website_details'),
+    # ── CUSTOM ADMIN PANEL ───────────────────────────────────
+    path("admin/home/",
+         adminviews.ADMINHOME, name="admin_home"),
 
-    # =========================================================
-    # DOCTOR PANEL
-    # =========================================================
-    path('doctor/signup/', docviews.DOCSIGNUP, name='docsignup'),
-    path('doctor/home/', docviews.DOCTORHOME, name='doctor_home'),
+    path("admin/specialization/",
+         adminviews.SPECIALIZATION, name="add_specilizations"),
+    path("admin/manage-specialization/",
+         adminviews.MANAGESPECIALIZATION, name="manage_specilizations"),
 
-    path('doctor/view-appointment/', docviews.View_Appointment, name='view_appointment'),
-    path('doctor/appointment-details/<str:id>/', docviews.Patient_Appointment_Details, name='patientappointmentdetails'),
-    path('doctor/appointment-remark/update/', docviews.Patient_Appointment_Details_Remark, name='patient_appointment_details_remark'),
+    # NÂNG CẤP: <int:id> cho tất cả ID params
+    path("admin/delete-specialization/<int:id>/",
+         adminviews.DELETE_SPECIALIZATION, name="delete_specilizations"),
+    path("admin/update-specialization/<int:id>/",
+         adminviews.UPDATE_SPECIALIZATION, name="update_specilizations"),
+    path("admin/update-specialization-details/",
+         adminviews.UPDATE_SPECIALIZATION_DETAILS, name="update_specilizations_details"),
 
-    path('doctor/appointments/approved/', docviews.Patient_Approved_Appointment, name='patientapprovedappointment'),
-    path('doctor/appointments/cancelled/', docviews.Patient_Cancelled_Appointment, name='patientcancelledappointment'),
-    path('doctor/appointments/new/', docviews.Patient_New_Appointment, name='patientnewappointment'),
-    path('doctor/appointments/list-approved/', docviews.Patient_List_Approved_Appointment, name='patientlistappointment'),
+    path("admin/doctor-list/",
+         adminviews.DoctorList, name="viewdoctorlist"),
+    path("admin/view-doctor-details/<int:id>/",
+         adminviews.ViewDoctorDetails, name="viewdoctordetails"),
+    path("admin/view-doctor-appointments/<int:id>/",
+         adminviews.ViewDoctorAppointmentList, name="viewdoctorappointmentlist"),
+    path("admin/view-patient-details/<int:id>/",
+         adminviews.ViewPatientDetails, name="viewpatientdetails"),
 
-    path('doctor/appointment-list/<str:id>/', docviews.DoctorAppointmentList, name='doctorappointmentlist'),
-    path('doctor/prescription/', docviews.Patient_Appointment_Prescription, name='patientappointmentprescription'),
-    path('doctor/completed/', docviews.Patient_Appointment_Completed, name='patientappointmentcompleted'),
+    path("admin/search-doctor/",
+         adminviews.Search_Doctor, name="search_doctor"),
+    path("admin/doctor-report/",
+         adminviews.Doctor_Between_Date_Report, name="doctor_between_date_report"),
 
-    path('doctor/search-appointment/', docviews.Search_Appointments, name='search_appointment'),
-    path('doctor/report/', docviews.Between_Date_Report, name='between_date_report'),
+    path("admin/website/update/",
+         adminviews.WEBSITE_UPDATE, name="website_update"),
+    path("admin/website/update-details/",
+         adminviews.UPDATE_WEBSITE_DETAILS, name="update_website_details"),
 
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # ── DOCTOR PANEL ─────────────────────────────────────────
+    path("doctor/home/",
+         docviews.DOCTORHOME, name="doctor_home"),
+
+    path("doctor/view-appointment/",
+         docviews.View_Appointment, name="view_appointment"),
+    path("doctor/appointment-details/<int:id>/",
+         docviews.Patient_Appointment_Details, name="patientappointmentdetails"),
+    path("doctor/appointment-remark/update/",
+         docviews.Patient_Appointment_Details_Remark,
+         name="patient_appointment_details_remark"),
+
+    path("doctor/appointments/approved/",
+         docviews.Patient_Approved_Appointment, name="patientapprovedappointment"),
+    path("doctor/appointments/cancelled/",
+         docviews.Patient_Cancelled_Appointment, name="patientcancelledappointment"),
+    path("doctor/appointments/new/",
+         docviews.Patient_New_Appointment, name="patientnewappointment"),
+    path("doctor/appointments/list-approved/",
+         docviews.Patient_List_Approved_Appointment, name="patientlistappointment"),
+
+    path("doctor/appointment-list/<int:id>/",
+         docviews.DoctorAppointmentList, name="doctorappointmentlist"),
+    path("doctor/prescription/",
+         docviews.Patient_Appointment_Prescription,
+         name="patientappointmentprescription"),
+    path("doctor/completed/",
+         docviews.Patient_Appointment_Completed, name="patientappointmentcompleted"),
+
+    path("doctor/search-appointment/",
+         docviews.Search_Appointments, name="search_appointment"),
+    path("doctor/report/",
+         docviews.Between_Date_Report, name="between_date_report"),
+]
+
+# ── MEDIA FILES ───────────────────────────────────────────────
+# FIX: static() chỉ hoạt động khi DEBUG=True
+# Production dùng S3 (USE_S3=True) hoặc nginx serve trực tiếp
+# → không append static() ở đây nữa để tránh silent failure
+if settings.DEBUG:
+    from django.conf.urls.static import static
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

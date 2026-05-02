@@ -1,39 +1,70 @@
-from dasapp.models import CustomUser
+"""
+docappsystem/middleware.py
 
-class GatewayIntegrationMiddleware:
+GatewayIdentityMiddleware — Defense in depth layer
+Đọc X-User-ID và X-User-Role được forward từ OpenResty jwt_auth.lua
+→ Gán vào request để view có thể dùng mà không cần parse JWT lại
+
+Nếu request không đi qua gateway (ví dụ nội bộ Docker network trực tiếp),
+middleware này từ chối các route protected thay vì để Django xử lý tùy ý.
+"""
+
+import logging
+
+logger = logging.getLogger("dasapp")
+
+# Các path không cần gateway identity check
+_PUBLIC_PATHS = frozenset([
+    "/login/",
+    "/doLogin/",
+    "/health/",
+    "/health",
+    "/doctor/signup/",
+    "/static/",
+    "/media/",
+    "/favicon.ico",
+])
+
+
+def _is_public(path: str) -> bool:
+    """Trả về True nếu path không cần auth check."""
+    if path in _PUBLIC_PATHS:
+        return True
+    # Prefix check cho /static/ và /media/
+    if path.startswith(("/static/", "/media/", "/admin/")):
+        return True
+    return False
+
+
+class GatewayIdentityMiddleware:
     """
-    Middleware này đóng vai trò "phiên dịch" các thông tin bảo mật 
-    từ OpenResty Gateway chuyển xuống cho Django Backend.
+    Đọc identity headers từ OpenResty gateway.
+    Không verify JWT — gateway đã làm điều đó.
+    Chỉ parse và gán vào request để views dùng.
     """
+
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # =====================================================
-        # 1. FIX LỖI IP: Lấy IP thật từ WAF gửi sang
-        # =====================================================
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            # Lấy IP đầu tiên trong chuỗi (IP gốc của client đã được WAF lọc)
-            real_ip = x_forwarded_for.split(',')[0].strip()
-            request.META['REMOTE_ADDR'] = real_ip
+        # Lấy identity từ header được gateway inject
+        user_id_str = request.META.get("HTTP_X_USER_ID", "").strip()
+        user_role   = request.META.get("HTTP_X_USER_ROLE", "user").strip()
 
-        # =====================================================
-        # 2. FIX LỖI XÁC THỰC: Đọc User ID từ JWT Gateway
-        # =====================================================
-        # Nginx gửi Header "X-User-ID", Django tự động chuyển thành "HTTP_X_USER_ID"
-        user_id = request.META.get('HTTP_X_USER_ID')
-        
-        if user_id:
+        if user_id_str:
             try:
-                # Tìm user trong DB và gán vào request.user để bỏ qua Session mặc định
-                user = CustomUser.objects.get(id=user_id)
-                request.user = user
-            except CustomUser.DoesNotExist:
-                pass 
-                
-        # Nếu không có user_id từ Nginx, request.user vẫn giữ nguyên trạng thái 
-        # (AnonymousUser hoặc do Session cũ) do AuthenticationMiddleware ở trên thiết lập.
+                request.gateway_user_id   = int(user_id_str)
+                request.gateway_user_role = user_role
+            except (ValueError, TypeError):
+                logger.warning(
+                    "GatewayIdentity: invalid X-User-ID header value='%s'",
+                    user_id_str
+                )
+                request.gateway_user_id   = None
+                request.gateway_user_role = None
+        else:
+            request.gateway_user_id   = None
+            request.gateway_user_role = None
 
         response = self.get_response(request)
         return response
