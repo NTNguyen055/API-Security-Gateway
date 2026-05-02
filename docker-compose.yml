@@ -1,15 +1,5 @@
-version: '3.8'
-
 # =============================================================================
 # Adaptive Web Security Gateway — docker-compose.yml
-# =============================================================================
-#
-# Topology:
-#   [Internet] → gateway (80/443) → app (8000) → RDS MySQL
-#                                 → redis (6379)  [internal only]
-#
-# Network: tất cả services trong "internal" bridge
-#          chỉ gateway expose port ra host
 # =============================================================================
 
 services:
@@ -25,7 +15,6 @@ services:
     expose:
       - "8000"
 
-    # FIX: chỉ dùng env_file, bỏ khối environment: riêng để tránh duplicate
     env_file:
       - /home/ubuntu/appointment-web/.env
 
@@ -33,6 +22,7 @@ services:
       redis:
         condition: service_healthy
 
+    # Đảm bảo bind 0.0.0.0:8000 để Nginx có thể gọi tới
     command: >
       sh -c "
         echo '[APP] Waiting for DB migration...' &&
@@ -42,22 +32,18 @@ services:
         echo '[APP] Running collectstatic...' &&
         python manage.py collectstatic --noinput &&
         echo '[APP] Starting gunicorn...' &&
-        exec gunicorn docappsystem.wsgi:application
-          --bind 0.0.0.0:8000
-          --workers 2
-          --threads 2
-          --timeout 60
-          --max-requests 1000
-          --max-requests-jitter 100
-          --access-logfile -
-          --error-logfile -
+        exec gunicorn docappsystem.wsgi:application 
+          --bind 0.0.0.0:8000 
+          --workers 2 
+          --threads 2 
+          --timeout 60 
+          --max-requests 1000 
+          --max-requests-jitter 100 
+          --access-logfile - 
+          --error-logfile - 
           --log-level info
       "
 
-    # XÓA KHỐI HEALTHCHECK ĐỂ DÙNG HEALTHCHECK CỦA DOCKERFILE
-    # (Đã chứa logic gửi X-Forwarded-Proto)
-
-    # NÂNG CẤP: giới hạn tài nguyên để tránh OOM ảnh hưởng toàn hệ thống
     deploy:
       resources:
         limits:
@@ -77,15 +63,13 @@ services:
 
 
   # ===========================================================================
-  # REDIS — rate limiting, blacklist cache, JWT cache, geo cache
+  # REDIS
   # ===========================================================================
   redis:
     image: redis:7-alpine
     container_name: docapp_redis
     restart: unless-stopped
 
-    # NÂNG CẤP: tăng maxmemory lên 128mb để đủ cho tất cả shared dict
-    # Lua shared dicts dùng OS memory riêng, Redis dùng container memory
     command: >
       redis-server
       --maxmemory 128mb
@@ -114,18 +98,12 @@ services:
         reservations:
           memory: 64m
 
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
     networks:
       - internal
 
 
   # ===========================================================================
-  # OPENRESTY GATEWAY — security pipeline, TLS termination
+  # OPENRESTY GATEWAY
   # ===========================================================================
   gateway:
     image: ntnguyen055/api-security-gateway:latest
@@ -135,17 +113,15 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "127.0.0.1:9145:9145"   # Prometheus metrics — internal only
+      - "127.0.0.1:9145:9145"
 
-    # FIX: chỉ dùng env_file, xóa khối environment: duplicate
-    # Tất cả biến gateway cần đã có trong .env
     env_file:
       - /home/ubuntu/appointment-web/.env
 
     volumes:
-      - /etc/letsencrypt:/etc/letsencrypt:ro         # TLS certs
-      - /var/www/html:/var/www/html:ro               # ACME challenge
-      - ./logs/nginx:/usr/local/openresty/nginx/logs # Nginx logs
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/html:/var/www/html:ro
+      - ./logs/nginx:/usr/local/openresty/nginx/logs
 
     depends_on:
       app:
@@ -153,7 +129,7 @@ services:
       redis:
         condition: service_healthy
 
-    # NÂNG CẤP: healthcheck thêm X-Forwarded-Proto và dùng 127.0.0.1 (tránh lỗi IPv6)
+    # Healthcheck gọi vào localhost của chính nó (nginx)
     healthcheck:
       test: ["CMD-SHELL", "curl -sf --max-time 4 -H 'Host: dacn3.duckdns.org' -H 'X-Forwarded-Proto: https' http://127.0.0.1/health/ || exit 1"]
       interval: 20s
@@ -166,38 +142,20 @@ services:
         soft: 65535
         hard: 65535
 
-    deploy:
-      resources:
-        limits:
-          memory: 256m
-          cpus: "1.0"
-        reservations:
-          memory: 128m
-
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "10"
-
     networks:
       - internal
 
 
 # =============================================================================
-# NETWORKS
+# NETWORKS & VOLUMES
 # =============================================================================
 networks:
   internal:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/24   # NÂNG CẤP: subnet cố định, dễ quản lý firewall
+        - subnet: 172.20.0.0/24
 
-
-# =============================================================================
-# VOLUMES
-# =============================================================================
 volumes:
   redis_data:
     driver: local
