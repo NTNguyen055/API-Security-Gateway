@@ -5,14 +5,15 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
+# [MỚI BỔ SUNG] Import thư viện auth mặc định của Django để dùng hàm Logout
+from django.contrib.auth import views as auth_views
+
 # Import views
 from . import views, adminviews, docviews, userviews
 
 
 # ============================================================
 # HEALTH CHECK
-# FIX: chỉ cho phép GET, thêm DB + cache check để healthcheck
-#      thực sự phản ánh tình trạng hệ thống
 # ============================================================
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -63,6 +64,9 @@ urlpatterns = [
     # ── PUBLIC (không cần JWT) ───────────────────────────────
     path("login/",   views.LOGIN,   name="login"),
     path("doLogin/", views.doLogin, name="doLogin"),
+    
+    # [MỚI BỔ SUNG] Đường dẫn Đăng xuất, tự động chuyển hướng về trang login sau khi thoát
+    path("logout/",  auth_views.LogoutView.as_view(next_page='login'), name="logout"),
 
     # Health check — match cả /health/ và /health (tránh redirect 301)
     path("health/", health_check, name="health"),
@@ -166,9 +170,6 @@ urlpatterns = [
 ]
 
 # ── MEDIA FILES ───────────────────────────────────────────────
-# FIX: static() chỉ hoạt động khi DEBUG=True
-# Production dùng S3 (USE_S3=True) hoặc nginx serve trực tiếp
-# → không append static() ở đây nữa để tránh silent failure
 if settings.DEBUG:
     from django.conf.urls.static import static
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
