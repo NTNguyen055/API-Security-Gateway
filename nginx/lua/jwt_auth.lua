@@ -45,8 +45,8 @@ local function is_web_route(uri)
         "^/static/", "^/media/", "^/admin",
         "^/doctor", "^/doc", 
         "^/user", "^/patient", 
-        "^/manage", "^/search", "^/view", "^/update"
-        "^/profile", "^/password"
+        "^/manage", "^/search", "^/view", "^/update", 
+        "^/profile", "^/password", "^/base", "^/logout"
     }
 
     for _, prefix in ipairs(web_prefixes) do
