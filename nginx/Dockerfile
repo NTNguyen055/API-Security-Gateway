@@ -44,10 +44,6 @@ COPY lua/ /usr/local/openresty/nginx/lua/
 # ================= PERMISSION =================
 RUN chmod -R 755 /usr/local/openresty/
 
-# ================= VERIFY =================
-# Jenkins sẽ chạy lệnh này ở Stage 4, nhưng để sẵn ở đây cũng là một lớp test an toàn
-RUN /usr/local/openresty/bin/openresty -t
-
 # ================= PORT =================
 EXPOSE 80 443 9145
 

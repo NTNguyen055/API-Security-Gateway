@@ -147,7 +147,8 @@ pipeline {
                 // 2. NÂNG CẤP: Test Nginx Syntax trực tiếp trên image vừa build (Chuẩn xác 100%)
                 sh '''
                     echo "--- Validating nginx.conf syntax on built image ---"
-                    docker run --rm ${GW_IMAGE}:${IMAGE_TAG} /usr/local/openresty/bin/openresty -t
+                    # Bơm thêm host ảo để Nginx không bị lỗi phân giải DNS khi test
+                    docker run --rm --add-host docapp_django:127.0.0.1 ${GW_IMAGE}:${IMAGE_TAG} /usr/local/openresty/bin/openresty -t
                     echo "[SMOKE] nginx.conf syntax OK"
                 '''
 
