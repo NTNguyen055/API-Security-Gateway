@@ -1,13 +1,15 @@
 local _M = {}
-
 local ngx      = ngx
 local math_min = math.min
+
+-- FIX 6: Chuẩn hóa độ dài log User-Agent ở một hằng số duy nhất để code nhất quán
+local MAX_UA_LOG = 120
 
 -- =============================================================================
 -- UA LISTS — mở rộng đầy đủ hơn
 -- =============================================================================
 
--- Scanner / exploit tools — hard block
+-- FIX 5: Bổ sung các công cụ scan phổ biến và các bot trinh sát (Reconnaissance)
 local SCANNERS = {
     -- Web scanners
     "sqlmap", "nikto", "nmap", "zgrab", "masscan",
@@ -15,16 +17,18 @@ local SCANNERS = {
     "wfuzz", "feroxbuster",
     -- Vuln scanners
     "acunetix", "nessus", "openvas", "qualys", "rapid7",
-    "burpsuite", "burp suite", "owasp zap", "zaproxy",
+    "burpsuite", "burp suite", "owasp zap", "zaproxy", "appscan",
     -- Password/brute
     "hydra", "medusa", "patator", "thc-hydra",
     -- Crawlers/scrapers tấn công
     "wpscan", "joomscan", "droopescan",
+    -- Advanced Tools / Recon
+    "metasploit", "havij", "w3af", "skipfish", "arachni", "vega",
+    "shodan", "censys", "binaryedge",
     -- Generic
     "scanner", "exploit", "attack", "inject",
 }
 
--- Headless browsers — suspicious, tăng risk cao
 local HEADLESS = {
     "headlesschrome", "headless chrome",
     "phantomjs", "slimerjs",
@@ -34,7 +38,6 @@ local HEADLESS = {
     "zombie.js", "mechanize",
 }
 
--- Dev tools — tăng risk nhẹ, không block
 local DEV_TOOLS = {
     "curl/", "wget/",
     "python-requests", "python-urllib",
@@ -45,23 +48,23 @@ local DEV_TOOLS = {
     "libwww-perl", "lwp-trivial",
 }
 
--- Legitimate crawlers — whitelist
 local WHITELIST = {
-    "googlebot", "bingbot", "slurp",          -- Search engines
+    "googlebot", "bingbot", "slurp",           
     "duckduckbot", "baiduspider", "yandexbot",
-    "facebookexternalhit", "twitterbot",       -- Social previews
+    "facebookexternalhit", "twitterbot",       
     "linkedinbot", "whatsapp", "telegrambot",
-    "applebot", "pingdom", "uptimerobot",      -- Monitoring
-    "healthchecker",                           -- Internal healthcheck
+    "applebot", "pingdom", "uptimerobot",      
+    "healthchecker",                           
 }
 
 -- =============================================================================
 -- HELPERS
 -- =============================================================================
+-- Hàm tìm kiếm literal string siêu nhanh (plain=true)
 local function contains_any(s, patterns)
     for i = 1, #patterns do
         if s:find(patterns[i], 1, true) then
-            return patterns[i]   -- NÂNG CẤP: trả về matched pattern để log
+            return patterns[i]   
         end
     end
     return nil
@@ -101,31 +104,65 @@ function _M.run(ctx)
 
     local ua_lower = ua:lower()
 
+    -- ── L1 CACHE (FIX 7: Tối ưu CPU, không quét lại UA đã phân loại) ──────
+    -- Tái sử dụng ip_cache đã có sẵn trong nginx.conf để lưu trạng thái UA
+    local cache = ngx.shared.ip_cache 
+    local cache_key = "ua:" .. ngx.md5(ua_lower)
+
+    if cache then
+        local cached_res = cache:get(cache_key)
+        if cached_res then
+            if cached_res == "whitelist" then
+                ctx.security.ua_whitelisted = true
+                return
+            elseif cached_res == "scanner" then
+                ctx.security.bad_bot_scanner = true
+                ctx.security.block           = true
+                ctx.security.risk            = 100
+                table.insert(ctx.security.signals, "bad_bot_scanner_cached")
+                return
+            elseif cached_res == "headless" then
+                ctx.security.bad_bot_headless = true
+                ctx.security.risk = math_min((ctx.security.risk or 0) + 60, 100)
+                table.insert(ctx.security.signals, "bad_bot_headless_cached")
+                return
+            elseif cached_res == "dev_tool" then
+                ctx.security.dev_tool = true
+                ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+                table.insert(ctx.security.signals, "dev_tool_cached")
+                return
+            elseif cached_res == "normal" then
+                ctx.security.ua_normal = true
+                return
+            elseif cached_res == "unknown" then
+                ctx.security.ua_unknown = true
+                ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
+                return
+            end
+        end
+    end
+
     -- ── WHITELIST ─────────────────────────────────────────────
     if contains_any(ua_lower, WHITELIST) then
         ctx.security.ua_whitelisted = true
+        -- FIX 2: Ghi log khi Whitelist để audit, đề phòng attacker fake UA "googlebot"
+        ngx.log(ngx.INFO, "[BAD_BOT] Whitelisted ua=", ua:sub(1, MAX_UA_LOG), " ip=", ip)
+        if cache then cache:set(cache_key, "whitelist", 3600) end
         return
     end
 
     -- ── SCANNER — hard block ngay ─────────────────────────────
-    -- FIX: set block = true, không chỉ tăng risk
     local matched_scanner = contains_any(ua_lower, SCANNERS)
     if matched_scanner then
         ctx.security.bad_bot_scanner = true
         ctx.security.block           = true
         ctx.security.risk            = 100
 
-        table.insert(ctx.security.signals, "bad_bot_scanner")
-
-        ngx.log(ngx.WARN,
-            "[BAD_BOT] Scanner ip=", ip,
-            " matched=", matched_scanner,
-            " ua=", ua:sub(1, 120)
-        )
-
-        if metric_blocked then
-            metric_blocked:inc(1, {"bad_bot_scanner"})
-        end
+        table.insert(ctx.security.signals, "bad_bot_scanner:" .. matched_scanner)
+        ngx.log(ngx.WARN, "[BAD_BOT] Scanner ip=", ip, " matched=", matched_scanner, " ua=", ua:sub(1, MAX_UA_LOG))
+        
+        if cache then cache:set(cache_key, "scanner", 3600) end
+        if metric_blocked then metric_blocked:inc(1, {"bad_bot_scanner"}) end
         return
     end
 
@@ -133,26 +170,19 @@ function _M.run(ctx)
     local matched_headless = contains_any(ua_lower, HEADLESS)
     if matched_headless then
         ctx.security.bad_bot_headless = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 40, 100)
+        -- FIX 4: Tăng Risk lên 60 thay vì 40. Headless 99% là tool cào dữ liệu (Scraping)
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 60, 100)
 
-        table.insert(ctx.security.signals, "bad_bot_headless")
-
-        ngx.log(ngx.WARN,
-            "[BAD_BOT] Headless ip=", ip,
-            " matched=", matched_headless,
-            " ua=", ua:sub(1, 120)
-        )
-        return
-    end
-
-    -- ── SAFE MOZILLA — browser thực sự ───────────────────────
-    -- Kiểm tra sau scanner/headless để tránh bỏ qua scanner giả Mozilla
-    if ua:find("Mozilla", 1, true) then
-        ctx.security.ua_normal = true
+        table.insert(ctx.security.signals, "bad_bot_headless:" .. matched_headless)
+        ngx.log(ngx.WARN, "[BAD_BOT] Headless ip=", ip, " matched=", matched_headless, " ua=", ua:sub(1, MAX_UA_LOG))
+        
+        if cache then cache:set(cache_key, "headless", 3600) end
         return
     end
 
     -- ── DEV TOOLS ─────────────────────────────────────────────
+    -- FIX 3: Đưa DEV_TOOLS lên TRƯỚC Mozilla. 
+    -- Chặn các kịch bản fake UA kiểu "Mozilla/5.0 python-requests/2.28"
     local matched_dev = contains_any(ua_lower, DEV_TOOLS)
     if matched_dev then
         ctx.security.dev_tool = true
@@ -163,26 +193,29 @@ function _M.run(ctx)
         end
 
         ctx.security.risk = math_min((ctx.security.risk or 0) + base, 100)
-        table.insert(ctx.security.signals, "dev_tool")
+        table.insert(ctx.security.signals, "dev_tool:" .. matched_dev)
 
-        ngx.log(ngx.INFO,
-            "[BAD_BOT] DevTool ip=", ip,
-            " matched=", matched_dev,
-            " ua=", ua:sub(1, 80)
-        )
+        ngx.log(ngx.INFO, "[BAD_BOT] DevTool ip=", ip, " matched=", matched_dev, " ua=", ua:sub(1, MAX_UA_LOG))
+        
+        if cache then cache:set(cache_key, "dev_tool", 3600) end
+        return
+    end
+
+    -- ── SAFE MOZILLA — browser thực sự ───────────────────────
+    -- Kiểm tra sau scanner/headless/dev_tool
+    if ua:find("Mozilla", 1, true) or ua:find("Opera", 1, true) then
+        ctx.security.ua_normal = true
+        if cache then cache:set(cache_key, "normal", 3600) end
         return
     end
 
     -- ── UNKNOWN UA ────────────────────────────────────────────
-    -- UA không nhận ra → tăng risk nhẹ để risk_engine xét thêm context
     ctx.security.ua_unknown = true
     ctx.security.risk = math_min((ctx.security.risk or 0) + 5, 100)
     table.insert(ctx.security.signals, "ua_unknown")
 
-    ngx.log(ngx.INFO,
-        "[BAD_BOT] Unknown UA ip=", ip,
-        " ua=", ua:sub(1, 80)
-    )
+    ngx.log(ngx.INFO, "[BAD_BOT] Unknown UA ip=", ip, " ua=", ua:sub(1, MAX_UA_LOG))
+    if cache then cache:set(cache_key, "unknown", 3600) end
 end
 
 return _M

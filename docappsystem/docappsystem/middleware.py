@@ -10,13 +10,16 @@ middleware này từ chối các route protected thay vì để Django xử lý 
 """
 
 import logging
+from django.http import JsonResponse
+from django.shortcuts import redirect
 
 logger = logging.getLogger("dasapp")
 
-# Các path không cần gateway identity check
+# FIX 2: Đồng bộ 100% với danh sách PUBLIC_PATHS của jwt_auth.lua
 _PUBLIC_PATHS = frozenset([
     "/login/",
     "/doLogin/",
+    "/logout/",  # <--- THÊM DÒNG NÀY
     "/health/",
     "/health",
     "/doctor/signup/",
@@ -25,14 +28,29 @@ _PUBLIC_PATHS = frozenset([
     "/favicon.ico",
 ])
 
+# FIX 2: Đồng bộ với WEB_PREFIXES_PATTERN của jwt_auth.lua
+# Các prefix này sử dụng Session Cookie của Django thay vì JWT
+_WEB_PREFIXES = (
+    "/static/", "/media/", "/admin/",
+    "/doctor/", "/doctors/",
+    "/user/", "/users/",
+    "/patient/", "/patients/",
+    "/manage/", "/search/", "/view/", "/update/",
+    "/profile/", "/password/", "/base/", "/logout/"
+)
+
+# FIX 3: Whitelist Role hợp lệ để chống Header Injection
+_VALID_ROLES = frozenset(["user", "doctor", "admin", "patient", "manager", "nurse"])
+
 
 def _is_public(path: str) -> bool:
-    """Trả về True nếu path không cần auth check."""
+    """Trả về True nếu path là Public hoặc thuộc Giao diện Web (Không ép buộc JWT từ Gateway)."""
     if path in _PUBLIC_PATHS:
         return True
-    # Prefix check cho /static/ và /media/
-    if path.startswith(("/static/", "/media/", "/admin/")):
+    
+    if path.startswith(_WEB_PREFIXES):
         return True
+        
     return False
 
 
@@ -51,6 +69,10 @@ class GatewayIdentityMiddleware:
         user_id_str = request.META.get("HTTP_X_USER_ID", "").strip()
         user_role   = request.META.get("HTTP_X_USER_ROLE", "user").strip()
 
+        # Sanitize Role: Nếu Role không có trong danh sách cho phép, ép về "user"
+        if user_role not in _VALID_ROLES:
+            user_role = "user"
+
         if user_id_str:
             try:
                 request.gateway_user_id   = int(user_id_str)
@@ -65,6 +87,16 @@ class GatewayIdentityMiddleware:
         else:
             request.gateway_user_id   = None
             request.gateway_user_role = None
+
+        # FIX 1: Enforcement (Thực thi chặn đứng)
+        # Nếu path này ĐÁNG LÝ phải là API (không nằm trong Public hay Web)
+        # mà lại KHÔNG có ID từ Gateway truyền xuống -> Đích thị là bypass Gateway!
+        if not _is_public(request.path) and request.gateway_user_id is None:
+            logger.warning(f"Defense in Depth: Blocked unauthorized API access to {request.path}")
+            return JsonResponse({
+                "error": "Unauthorized", 
+                "detail": "Gateway Identity Missing. Direct access to internal application is forbidden."
+            }, status=401)
 
         response = self.get_response(request)
         return response

@@ -1,10 +1,13 @@
 local _M = {}
 
-local ngx      = ngx
-local tonumber = tonumber
-local math_min = math.min
+local ngx        = ngx
+local tonumber   = tonumber
+local math_min   = math.min
+local redis_helper = require "redis_helper" -- FIX 1: Tái sử dụng redis_helper.lua
 
--- Đọc trong function vì nginx.conf cần khai báo env trước
+-- ============================================================
+-- CONFIG
+-- ============================================================
 local function get_config()
     return {
         block_threshold = tonumber(os.getenv("RISK_BLOCK_THRESHOLD")) or 80,
@@ -16,46 +19,28 @@ local DECAY_FACTOR = 0.9
 local MAX_RISK     = 100
 
 -- ============================================================
--- REDIS HELPER — timeout tăng lên 200/500ms, db 0
--- ============================================================
-local function get_redis()
-    local redis = require "resty.redis"
-    local red   = redis:new()
-
-    red:set_timeouts(200, 200, 500)
-
-    local ok, err = red:connect("redis", 6379)
-    if not ok then
-        return nil, err
-    end
-
-    return red
-end
-
--- ============================================================
 -- SIGNAL CORRELATION
--- Chỉ cộng thêm điểm cho signal KHÔNG được tính trong module gốc
--- Tránh double-counting (module gốc đã cộng vào ctx.security.risk)
 -- ============================================================
 local SIGNAL_BONUS = {
-    -- xff_private_client: module gốc cộng +20, bonus correlation thêm +5
-    xff_private_client  = 5,
-    -- bad_bot_scanner: module gốc cộng +50, bonus thêm +10 khi kết hợp
-    bad_bot_scanner     = 10,
-    -- geo_block kết hợp với signal khác mới cộng thêm
-    geo_block           = 5,
-    -- empty_ua kết hợp: suspicious hơn
-    empty_ua            = 5,
+    -- Đã có
+    xff_private_client = 5,
+    bad_bot_scanner    = 10,
+    geo_block          = 5,
+    empty_ua           = 5,
+    
+    -- FIX 5: Bổ sung các tín hiệu bảo mật cực kỳ nguy hiểm
+    jwt_replay         = 15,   -- Đánh cắp Token
+    jwt_alg_attack     = 20,   -- Tấn công kỹ thuật bẻ khóa JWT
+    waf_xss            = 10,   -- Lỗ hổng nhúng mã JS
+    xff_chain_abuse    = 15,   -- Giấu mặt sau nhiều tầng Proxy
 }
 
 -- ============================================================
--- MAIN — KHÔNG gọi ngx.exit() trực tiếp
--- Trả về action qua ctx để nginx.conf xử lý (tránh bị pcall catch)
+-- MAIN
 -- ============================================================
 function _M.run(ctx)
     local cfg = get_config()
 
-    -- Ưu tiên dùng client_ip đã normalize từ xff_guard
     local ip = (ctx.security and ctx.security.client_ip)
                or ngx.var.realip_remote_addr
                or ngx.var.remote_addr
@@ -64,11 +49,13 @@ function _M.run(ctx)
     local base_risk      = ctx.security.risk or 0
     local signals        = ctx.security.signals or {}
 
-    -- ── SIGNAL CORRELATION (chỉ bonus, không double-count) ────
+    -- ── SIGNAL CORRELATION (Cộng dồn điểm rủi ro ẩn) ──────────
     local bonus = 0
     local signal_set = {}
     for _, s in ipairs(signals) do
-        signal_set[s] = true
+        -- Lấy prefix của signal (ví dụ từ bad_bot_scanner:sqlmap thành bad_bot_scanner)
+        local base_signal = s:match("^([^:]+)") or s
+        signal_set[base_signal] = true
     end
 
     for signal, points in pairs(SIGNAL_BONUS) do
@@ -77,65 +64,66 @@ function _M.run(ctx)
         end
     end
 
-    -- Thêm bonus khi có sự kết hợp nguy hiểm
-    if signal_set["waf_sqli"] and signal_set["bad_bot_scanner"] then
-        bonus = bonus + 15  -- SQLi từ scanner — rất nguy hiểm
-    end
-    if signal_set["rate_limit_hard"] and signal_set["geo_block"] then
-        bonus = bonus + 10  -- DDoS từ nước bị chặn
-    end
-    if signal_set["jwt_invalid"] and signal_set["rate_limit_hard"] then
-        bonus = bonus + 10  -- Brute force JWT
-    end
+    -- FIX 6: Mở rộng các combo nguy hiểm (Combination Bonus)
+    if signal_set["waf_sqli"] and signal_set["bad_bot_scanner"] then bonus = bonus + 15 end
+    if signal_set["rate_limit_hard"] and signal_set["geo_block"] then bonus = bonus + 10 end
+    if signal_set["jwt_invalid"] and signal_set["rate_limit_hard"] then bonus = bonus + 10 end
+    
+    -- Combo mới
+    if signal_set["waf_xss"] and signal_set["jwt_missing"] then bonus = bonus + 15 end          -- Tấn công XSS khi chưa đăng nhập
+    if signal_set["bad_bot_headless"] and signal_set["waf_sqli"] then bonus = bonus + 20 end    -- Dùng tool tự động để cào Database
+    if signal_set["xff_private_client"] and signal_set["jwt_invalid"] then bonus = bonus + 15 end -- Giả mạo IP LAN để phá mật khẩu
 
     base_risk = math_min(base_risk + bonus, MAX_RISK)
 
     -- ── REDIS REPUTATION ──────────────────────────────────────
-    local red, err = get_redis()
+    -- FIX 1: Kết nối an toàn qua Helper (Tự động Select DB 0)
+    local red, err = redis_helper.get_redis(0)
 
     if not red then
         ngx.log(ngx.WARN, "[RISK] Redis unavailable: ", err)
-
-        -- Fallback: quyết định dựa trên base_risk
+        -- Fallback Graceful
         if base_risk >= cfg.block_threshold then
             ctx.security.risk_action = "block"
         elseif base_risk >= cfg.limit_threshold then
             ctx.security.risk_action = "limit"
         end
-
         ctx.security.risk_final = base_risk
         return
     end
 
-    local key        = "risk:v1:" .. ip
+    local key = "risk:v1:" .. ip
     local reputation = red:get(key)
+    reputation = (reputation and reputation ~= ngx.null) and tonumber(reputation) or 0
 
-    if not reputation or reputation == ngx.null then
-        reputation = 0
-    else
-        reputation = tonumber(reputation) or 0
+    -- FIX 2: Clamp (Chốt chặn max) ngay tại từng bước tính toán để logic rõ ràng
+    local final_risk = math_min(reputation * DECAY_FACTOR + base_risk, MAX_RISK)
+
+    -- Momentum: Phạt nặng hơn nếu request liên tiếp chứa dấu hiệu xấu
+    -- FIX 7: Tăng ngưỡng lên 50 để tránh phạt oan người dùng chỉ mở F12 (Dev_tool)
+    if base_risk > 50 then
+        final_risk = math_min(final_risk + 10, MAX_RISK)
     end
 
-    -- Công thức: reputation cũ decay + base_risk hiện tại
-    local final_risk = reputation * DECAY_FACTOR + base_risk
-
-    -- Momentum: request xấu liên tiếp tăng nhanh hơn
-    if base_risk > 30 then
-        final_risk = final_risk + 10
-    end
-
-    -- Forgiveness: request sạch giảm dần reputation
-    if base_risk < 10 then
+    -- Forgiveness: "Khoan hồng" cho IP gửi request sạch
+    -- FIX 8: Chỉ giảm điểm nhanh nếu IP đó chưa từng bị gắn mác "Tội phạm" (Attacker)
+    if base_risk < 10 and reputation < cfg.block_threshold then
         final_risk = final_risk * 0.8
     end
 
-    final_risk = math_min(final_risk, MAX_RISK)
+    -- FIX 4: Trừng phạt theo cấp độ - Kẻ càng nguy hiểm bị nhớ càng lâu
+    local rep_ttl = 3600 -- Mặc định 1 giờ
+    if final_risk >= cfg.block_threshold then
+        rep_ttl = 86400  -- Bị Block: Ghi nhớ 24 giờ
+    elseif final_risk >= cfg.limit_threshold then
+        rep_ttl = 7200   -- Bị Limit: Ghi nhớ 2 giờ
+    end
 
-    -- Ghi reputation mới vào Redis (TTL 1 giờ)
-    red:set(key, string.format("%.2f", final_risk), "EX", 3600)
-    red:set_keepalive(10000, 100)
+    -- Ghi điểm Uy tín (Reputation) mới vào Redis
+    red:set(key, string.format("%.2f", final_risk), "EX", rep_ttl)
+    redis_helper.close(red)
 
-    -- Log đầy đủ context để forensics
+    -- Log chi tiết (Forensics)
     ngx.log(ngx.INFO,
         "[RISK] ip=", ip,
         " base=", string.format("%.1f", base_risk),
@@ -145,31 +133,15 @@ function _M.run(ctx)
         " signals=[", table.concat(signals, ","), "]"
     )
 
-    -- ── QUYẾT ĐỊNH — set action vào ctx, KHÔNG gọi ngx.exit() ─
-    -- nginx.conf sẽ đọc ctx.security.risk_action và gọi ngx.exit()
+    -- ── DECISION (Quyết định hành động) ───────────────────────
     if final_risk >= cfg.block_threshold then
-        ngx.log(ngx.WARN,
-            "[RISK] BLOCK ip=", ip,
-            " final=", string.format("%.1f", final_risk),
-            " signals=[", table.concat(signals, ","), "]"
-        )
-
-        if metric_blocked then
-            metric_blocked:inc(1, {"risk_block"})
-        end
-
+        ngx.log(ngx.WARN, "[RISK] BLOCK ip=", ip, " final=", string.format("%.1f", final_risk), " signals=[", table.concat(signals, ","), "]")
+        if metric_blocked then metric_blocked:inc(1, {"risk_block"}) end
         ctx.security.risk_action = "block"
 
     elseif final_risk >= cfg.limit_threshold then
-        ngx.log(ngx.WARN,
-            "[RISK] LIMIT ip=", ip,
-            " final=", string.format("%.1f", final_risk)
-        )
-
-        if metric_blocked then
-            metric_blocked:inc(1, {"risk_limit"})
-        end
-
+        ngx.log(ngx.WARN, "[RISK] LIMIT ip=", ip, " final=", string.format("%.1f", final_risk))
+        if metric_blocked then metric_blocked:inc(1, {"risk_limit"}) end
         ctx.security.risk_action = "limit"
     end
 

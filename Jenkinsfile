@@ -16,6 +16,11 @@ pipeline {
         timestamps()
     }
 
+    // FIX 1: Dùng Parameters thay vì Hardcode IP vào biến môi trường để bảo mật
+    parameters {
+        string(name: 'EC2_APP_IP', defaultValue: '13.159.56.185', description: 'Public IP of the EC2 Server')
+    }
+
     // =========================================================================
     // ENVIRONMENT
     // =========================================================================
@@ -29,7 +34,7 @@ pipeline {
 
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         EC2_SSH_CREDS   = 'app-server-ssh'
-        EC2_APP_IP      = '13.159.56.185'
+        // FIX 1: Đã xóa dòng EC2_APP_IP hardcode ở đây
         EC2_USER        = 'ubuntu'
 
         BASE_DIR        = '/home/ubuntu/appointment-web'
@@ -78,7 +83,7 @@ pipeline {
 
                     for lua in xff_guard ip_blacklist geo_block bad_bot \
                                rate_limit rate_limit_redis waf_sqli_xss \
-                               jwt_auth risk_engine; do
+                               jwt_auth risk_engine utils redis_helper; do
                         test -f "nginx/lua/${lua}.lua" || { echo "MISSING Lua: nginx/lua/${lua}.lua"; exit 1; }
                     done
 
@@ -162,6 +167,7 @@ pipeline {
 
         // ── STAGE 5: PUSH TO DOCKERHUB ────────────────────────────────────────
         stage('Push to DockerHub') {
+            when { branch 'main' } // FIX 6: Giới hạn chỉ Push khi ở branch main
             steps {
                 echo "🐳 [5/6] Pushing images to DockerHub..."
                 sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
@@ -176,23 +182,15 @@ pipeline {
 
         // ── STAGE 6: DEPLOY TO EC2 ────────────────────────────────────────────
         stage('Deploy & Verify') {
+            when { branch 'main' } // FIX 6: Giới hạn chỉ Deploy khi ở branch main
             steps {
-                echo "🚢 [6/6] Deploying to EC2 (${EC2_APP_IP})..."
+                echo "🚢 [6/6] Deploying to EC2 (${params.EC2_APP_IP})..."
 
                 script {
+                    // FIX 8: Bỏ cơ chế replace chuỗi nguy hiểm, ghi thẳng ra file script nguyên bản
                     def deployScript = '''\
 #!/usr/bin/env bash
 set -euo pipefail
-
-APP_IMAGE="__APP_IMAGE__"
-GW_IMAGE="__GW_IMAGE__"
-IMAGE_TAG="__IMAGE_TAG__"
-APP_DIR="__APP_DIR__"
-BASE_DIR="__BASE_DIR__"
-ENV_PATH="__ENV_PATH__"
-HEALTH_DOMAIN="__HEALTH_DOMAIN__"
-HEALTH_RETRIES="__HEALTH_RETRIES__"
-COMPOSE_TIMEOUT="__COMPOSE_TIMEOUT__"
 
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 fail() { echo "FAILED: $*" >&2; exit 1; }
@@ -202,17 +200,19 @@ test -f "${ENV_PATH}" || fail ".env not found at ${ENV_PATH}"
 
 log "[2] Syncing code from GitHub..."
 mkdir -p "${BASE_DIR}"
+PREV_COMMIT="HEAD"
+
 if [ ! -d "${APP_DIR}/.git" ]; then
-    git clone --depth 1 https://github.com/NTNguyen055/API-Security-Gateway.git "${APP_DIR}"
+    # FIX 2: Clone qua SSH (Bảo mật hơn HTTPS public)
+    git clone --depth 1 git@github.com:NTNguyen055/API-Security-Gateway.git "${APP_DIR}"
 else
     cd "${APP_DIR}"
-    # FIX: Giành lại quyền sở hữu các file/folder do Docker (root) tạo ra
+    # FIX 3: Ghi chú - Lệnh sudo này yêu cầu user ubuntu được cấu hình NOPASSWD
     sudo chown -R $USER:$USER "${APP_DIR}" 2>/dev/null || true
     
+    PREV_COMMIT=$(git rev-parse HEAD)
     git fetch origin --tags
     git reset --hard origin/main
-    
-    # FIX: Thêm cờ loại trừ thư mục logs để git clean không cố gắng xóa nó
     git clean -fd -e logs/
 fi
 cd "${APP_DIR}"
@@ -233,6 +233,11 @@ docker tag "${GW_IMAGE}:${IMAGE_TAG}"  "${GW_IMAGE}:latest"
 do_rollback() {
     log "Initiating rollback..."
     docker compose --env-file "${ENV_PATH}" down --remove-orphans || true
+    
+    # FIX 4: Rollback phục hồi lại cả mã nguồn cũ
+    log "Rolling back source code to ${PREV_COMMIT}..."
+    git reset --hard "${PREV_COMMIT}"
+    
     docker tag "${APP_IMAGE}:rollback" "${APP_IMAGE}:latest" 2>/dev/null || true
     docker tag "${GW_IMAGE}:rollback"  "${GW_IMAGE}:latest"  2>/dev/null || true
     docker compose --env-file "${ENV_PATH}" up -d --wait --wait-timeout "${COMPOSE_TIMEOUT}" --remove-orphans || log "Rollback failed!"
@@ -249,8 +254,13 @@ RETRY=0
 HTTP_OK=0
 while [ "${RETRY}" -lt "${HEALTH_RETRIES}" ]; do
     RETRY=$((RETRY + 1))
+    
     HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" -H "Host: ${HEALTH_DOMAIN}" -H "X-Forwarded-Proto: https" "http://localhost/health/" || echo "000")
-    if [ "${HTTP_CODE}" = "200" ]; then
+    
+    # FIX 5: Bổ sung check qua Gateway Security Pipeline để đảm bảo file Lua không chết
+    SEC_CODE=$(curl -sf -o /dev/null -w "%{http_code}" -H "Host: ${HEALTH_DOMAIN}" -H "X-Forwarded-Proto: https" "http://localhost/login/" || echo "000")
+    
+    if [ "${HTTP_CODE}" = "200" ] && [ "${SEC_CODE}" = "200" ]; then
         HTTP_OK=1
         break
     fi
@@ -259,7 +269,7 @@ done
 
 if [ "${HTTP_OK}" -ne 1 ]; then
     do_rollback
-    fail "Health check failed — rolled back"
+    fail "Health checks failed (HTTP:${HTTP_CODE}, SEC:${SEC_CODE}) — rolled back"
 fi
 
 log "[8] Verifying containers..."
@@ -279,35 +289,20 @@ log "=================================================="
 log "DEPLOYMENT SUCCESSFUL"
 log "=================================================="
 '''
-                    deployScript = deployScript
-                        .replace('__APP_IMAGE__',      env.APP_IMAGE)
-                        .replace('__GW_IMAGE__',       env.GW_IMAGE)
-                        .replace('__IMAGE_TAG__',      env.IMAGE_TAG)
-                        .replace('__APP_DIR__',        env.APP_DIR)
-                        .replace('__BASE_DIR__',       env.BASE_DIR)
-                        .replace('__ENV_PATH__',       env.ENV_PATH)
-                        .replace('__HEALTH_DOMAIN__',  env.HEALTH_DOMAIN)
-                        .replace('__HEALTH_RETRIES__', env.HEALTH_RETRIES)
-                        .replace('__COMPOSE_TIMEOUT__',env.COMPOSE_TIMEOUT)
-
-                    writeFile file: 'deploy_remote.sh', text: deployScript
+                    writeFile file: 'deploy.sh', text: deployScript
                 }
 
                 sshagent(credentials: [EC2_SSH_CREDS]) {
-                    sh '''
-                        scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 deploy_remote.sh ${EC2_USER}@${EC2_APP_IP}:/tmp/deploy_remote_${BUILD_NUMBER}.sh
-                        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${EC2_USER}@${EC2_APP_IP} "chmod +x /tmp/deploy_remote_${BUILD_NUMBER}.sh && /tmp/deploy_remote_${BUILD_NUMBER}.sh"
-                    '''
+                    // FIX 8: Truyền biến môi trường an toàn vào luồng stdin thay vì copy/paste file
+                    sh """
+                        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${EC2_USER}@${params.EC2_APP_IP} "APP_IMAGE=${APP_IMAGE} GW_IMAGE=${GW_IMAGE} IMAGE_TAG=${IMAGE_TAG} APP_DIR=${APP_DIR} BASE_DIR=${BASE_DIR} ENV_PATH=${ENV_PATH} HEALTH_DOMAIN=${HEALTH_DOMAIN} HEALTH_RETRIES=${HEALTH_RETRIES} COMPOSE_TIMEOUT=${COMPOSE_TIMEOUT} bash -s" < deploy.sh
+                    """
                 }
             }
             post {
                 always {
-                    sh 'rm -f deploy_remote.sh || true'
-                    sshagent(credentials: [EC2_SSH_CREDS]) {
-                        sh '''
-                            ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_APP_IP} "rm -f /tmp/deploy_remote_${BUILD_NUMBER}.sh" 2>/dev/null || true
-                        '''
-                    }
+                    // Xóa file tạm ở máy chạy Jenkins
+                    sh 'rm -f deploy.sh || true'
                 }
             }
         }
@@ -322,9 +317,9 @@ log "=================================================="
             sh 'docker logout || true'
             sh '''
                 docker rmi ${APP_IMAGE}:${IMAGE_TAG} 2>/dev/null || true
-                docker rmi ${APP_IMAGE}:latest        2>/dev/null || true
+                # FIX 7: Bỏ xóa ${APP_IMAGE}:latest để giữ Cache cho Jenkins build lẹ hơn
                 docker rmi ${GW_IMAGE}:${IMAGE_TAG}  2>/dev/null || true
-                docker rmi ${GW_IMAGE}:latest         2>/dev/null || true
+                # FIX 7: Bỏ xóa ${GW_IMAGE}:latest
                 docker image prune -f                2>/dev/null || true
             '''
             

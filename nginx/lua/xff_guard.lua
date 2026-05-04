@@ -1,135 +1,97 @@
 local _M = {}
-
-local ngx      = ngx
+local ngx = ngx
 local math_min = math.min
 
--- Giới hạn chain để tránh header abuse
-local MAX_CHAIN = 10
+-- Gọi thư viện tiện ích để dùng chung các hàm kiểm tra IP (Thay thế cho 40 dòng code cũ)
+local utils = require "utils" 
 
--- ============================================================
--- PRIVATE / RESERVED IP RANGES
--- ============================================================
-local function is_private_ip(ip)
-    if not ip then return false end
-
-    -- Loopback
-    if ip == "127.0.0.1" or ip == "::1" then return true end
-
-    -- Link-local
-    if ip:match("^169%.254%.") then return true end
-
-    -- RFC-1918
-    if ip:match("^10%.") then return true end
-    if ip:match("^192%.168%.") then return true end
-
-    -- 172.16.0.0/12 — dùng số học thay vì alternation (Lua không hỗ trợ |)
-    local a, b = ip:match("^172%.(%d+)%.")
-    if a then
-        local n = tonumber(a)
-        if n and n >= 16 and n <= 31 then return true end
-    end
-
-    return false
-end
-
--- ============================================================
--- IPv4 VALIDATOR
--- ============================================================
-local function is_valid_ipv4(ip)
-    if not ip then return false end
-
-    local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-    if not a then return false end
-
-    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-    return a <= 255 and b <= 255 and c <= 255 and d <= 255
-end
-
--- ============================================================
--- IPv6 VALIDATOR (basic — chấp nhận format chuẩn)
--- ============================================================
-local function is_valid_ipv6(ip)
-    if not ip then return false end
-    -- Loại bỏ bracket notation [::1]
-    ip = ip:match("^%[(.+)%]$") or ip
-    -- Phải có ít nhất một dấu : và chỉ chứa hex + dấu :
-    return ip:find(":", 1, true) and not ip:match("[^0-9a-fA-F:]")
-end
-
--- ============================================================
--- PARSE XFF HEADER — hỗ trợ cả IPv4 và IPv6
--- ============================================================
-local function parse_xff(xff)
+-- =========================================================================
+-- PARSER
+-- =========================================================================
+local function parse_xff(xff_str)
     local ips = {}
-
-    for ip in xff:gmatch("([^,]+)") do
-        ip = ip:gsub("^%s*(.-)%s*$", "%1")
-
-        if is_valid_ipv4(ip) or is_valid_ipv6(ip) then
-            ips[#ips + 1] = ip
-        end
+    if not xff_str or xff_str == "" then return ips end
+    for ip in xff_str:gmatch("[^,]+") do
+        ip = ip:match("^%s*(.-)%s*$")
+        if ip and ip ~= "" then table.insert(ips, ip) end
     end
-
     return ips
 end
 
--- ============================================================
+-- =========================================================================
 -- MAIN
--- ============================================================
+-- =========================================================================
 function _M.run(ctx)
     local xff = ngx.var.http_x_forwarded_for
-    if not xff or xff == "" then
+    ctx.security = ctx.security or {}
+    ctx.security.signals = ctx.security.signals or {}
+
+    -- Lưu thêm remote_addr chuẩn để cross-check với ips[1]
+    ctx.security.remote_addr = ngx.var.remote_addr
+
+    -- Nếu không có header XFF, lấy thẳng IP kết nối thực tế
+    if not xff then
+        ctx.security.client_ip = ngx.var.remote_addr
+        ngx.req.set_header("X-Real-IP", ctx.security.client_ip)
         return
     end
-
-    ctx.security        = ctx.security or {}
-    ctx.security.signals = ctx.security.signals or {}
 
     local ips = parse_xff(xff)
 
-    -- ── MALFORMED HEADER ──────────────────────────────────────
-    if #ips == 0 then
-        ctx.security.xff_malformed = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 10, 100)
-        table.insert(ctx.security.signals, "xff_malformed")
-        ngx.log(ngx.WARN, "[XFF_GUARD] Malformed header | xff=", xff)
-        return
-    end
-
-    -- ── TOO MANY HOPS ─────────────────────────────────────────
-    if #ips > MAX_CHAIN then
+    -- 1. HARD BLOCK: XFF Chain Abuse (Hơn 10 proxies - Bắn phá bằng tool)
+    if #ips > 10 then
         ctx.security.xff_chain_abuse = true
-        ctx.security.block = true   -- hard block: chain > 10 là tấn công rõ ràng
-        ctx.security.risk  = 100
-
+        ctx.security.block = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 100, 100)
         table.insert(ctx.security.signals, "xff_chain_abuse")
-
-        ngx.log(ngx.WARN,
-            "[XFF_GUARD] Chain too long: ", #ips,
-            " | xff=", xff
-        )
+        ngx.log(ngx.WARN, "[XFF] Chain abuse detected. Length: ", #ips)
         return
     end
 
-    -- ── PRIVATE IP IN CLIENT POSITION ─────────────────────────
-    local client_ip = ips[1]
+    local valid_ips = {}
+    local has_malformed = false
 
-    if is_private_ip(client_ip) then
-        ctx.security.xff_private_client = true
-        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
-
-        table.insert(ctx.security.signals, "xff_private_client")
-
-        ngx.log(ngx.WARN,
-            "[XFF_GUARD] Private IP as client: ", client_ip
-        )
+    -- Lọc danh sách IP hợp lệ thông qua utils
+    for i, ip in ipairs(ips) do
+        if utils.is_valid_ip(ip) then
+            table.insert(valid_ips, ip)
+        else
+            has_malformed = true
+        end
     end
 
-    -- ── LƯU CLIENT IP VÀO CTX cho các module sau dùng chung ──
-    ctx.security.client_ip = client_ip
+    -- 2. TÍN HIỆU: Malformed XFF (Chèn ký tự lạ vào header)
+    if has_malformed then
+        ctx.security.xff_malformed = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+        table.insert(ctx.security.signals, "xff_malformed")
+    end
 
-    -- ── SANITIZE HEADER ───────────────────────────────────────
-    ngx.req.set_header("X-Forwarded-For", table.concat(ips, ", "))
+    if #valid_ips == 0 then
+        ctx.security.client_ip = ngx.var.remote_addr
+        ngx.req.set_header("X-Real-IP", ctx.security.client_ip)
+        return
+    end
+
+    -- Client IP theo nguyên tắc XFF là IP hợp lệ đầu tiên
+    local client_ip = valid_ips[1]
+
+    -- Tăng Risk Score lên 40 cho Private IP để chặn triệt để hành vi giả mạo IP nội bộ
+    if utils.is_private_ip(client_ip) then
+        ctx.security.xff_private_client = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 40, 100)
+        table.insert(ctx.security.signals, "xff_private_client")
+    end
+
+    -- 3. SANITIZE & SET HEADERS
+    -- Lọc lại header XFF để loại bỏ garbage/mã độc trước khi đẩy xuống Django
+    local sanitized_xff = table.concat(valid_ips, ", ")
+    ngx.req.set_header("X-Forwarded-For", sanitized_xff)
+
+    -- Đồng bộ X-Real-IP cho Django để Django luôn nhận được IP sạch
+    ngx.req.set_header("X-Real-IP", client_ip)
+
+    ctx.security.client_ip = client_ip
 end
 
 return _M

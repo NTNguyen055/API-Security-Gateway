@@ -22,11 +22,20 @@ services:
       redis:
         condition: service_healthy
 
-    # FIX: Viết lệnh trên các dòng rõ ràng, đảm bảo bind 0.0.0.0:8000 luôn được thực thi
+  # FIX: Đổi từ 'curl' sang 'python urllib' vì Image Django đã được tối ưu gỡ bỏ curl
+    healthcheck:
+      test: 
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/health/', headers={'X-Forwarded-Proto': 'https', 'Host': 'localhost'}); urllib.request.urlopen(req)\" || exit 1"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      
+    # FIX 2: Bỏ collectstatic để tăng tốc độ boot. Chỉ giữ lại migrate và Gunicorn.
     command: >
       sh -c "
       python manage.py migrate --noinput &&
-      python manage.py collectstatic --noinput &&
       gunicorn docappsystem.wsgi:application 
       --bind 0.0.0.0:8000 
       --workers 2 

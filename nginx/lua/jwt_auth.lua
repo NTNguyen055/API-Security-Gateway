@@ -1,87 +1,60 @@
 local _M = {}
 
 local ngx      = ngx
+local re_find  = ngx.re.find
 local re_match = ngx.re.match
 local math_min = math.min
 
--- FIX: require trong function scope, không ở module-level
+-- FIX 5: Bỏ sha256_lib và str_lib vì ta sẽ dùng ngx.md5 nội tại (nhanh hơn gấp nhiều lần)
 local function get_libs()
-    return
-        require "resty.jwt",
-        require "resty.sha256",
-        require "resty.string"
+    return require "resty.jwt"
 end
 
--- FIX: đọc JWT_SECRET trong function
 local function get_secret()
     local s = os.getenv("JWT_SECRET_KEY")
     if not s or s == "" then return nil end
     return s
 end
 
--- Danh sách các path cụ thể khớp chính xác 100%
 local PUBLIC_PATHS = {
     ["/"]                = true,
     ["/login"]           = true,
     ["/login/"]          = true,
     ["/doLogin"]         = true,
     ["/doLogin/"]        = true,
+    ["/logout/"]         = true,  
+    ["/logout"]          = true,  
     ["/health/"]         = true,
     ["/health"]          = true,
     ["/favicon.ico"]     = true,
+    ["/doctor/signup/"]  = true,  
 }
 
 -- =============================================================================
--- HÀM NHẬN DIỆN GIAO DIỆN WEB (Bypass JWT để dùng Session Cookie của Django)
+-- HÀM NHẬN DIỆN GIAO DIỆN WEB
 -- =============================================================================
+-- FIX 1 & 7: Gộp tất cả Prefix thành 1 chuỗi Regex PCRE siêu tốc và bắt buộc 
+-- phải kết thúc bằng dấu gạch chéo `/` hoặc hết chuỗi `$`. 
+-- Chặn đứng trò Bypass "/doc-exploit".
+local WEB_PREFIXES_PATTERN = [[^/(?:static|media|admin|doctor|doctors|user|users|patient|patients|manage|search|view|update|profile|password|base|logout)(?:/|$)]]
+
 local function is_web_route(uri)
     if not uri then return false end
-    
-    -- Chuyển toàn bộ URL về chữ thường để tránh lỗi gõ hoa/thường
-    local lower_uri = string.lower(uri)
-
-    -- Danh sách các tiền tố (prefix) của các trang Web/Static
-    local web_prefixes = {
-        "^/static/", "^/media/", "^/admin",
-        "^/doctor", "^/doc", 
-        "^/user", "^/patient", 
-        "^/manage", "^/search", "^/view", "^/update", 
-        "^/profile", "^/password", "^/base", "^/logout"
-    }
-
-    for _, prefix in ipairs(web_prefixes) do
-        if lower_uri:match(prefix) then
-            return true
-        end
-    end
-
-    return false
+    return re_find(uri, WEB_PREFIXES_PATTERN, "ijo") ~= nil
 end
 
--- TTL tối đa cho replay key
 local MAX_REPLAY_TTL = 3600  -- 1 giờ
-
--- =============================================================================
--- HASH TOKEN
--- =============================================================================
-local function hash_token(token, sha256_lib, str_lib)
-    local sha = sha256_lib:new()
-    sha:update(token)
-    return str_lib.to_hex(sha:final())
-end
+local INVALID_TTL    = 60    -- FIX 4: Giảm thời gian cache Token lỗi xuống 60s để tiết kiệm RAM
 
 -- =============================================================================
 -- MAIN
 -- =============================================================================
 function _M.run(ctx)
     local JWT_SECRET = get_secret()
-    if not JWT_SECRET then
-        return
-    end
+    if not JWT_SECRET then return end
 
     local uri = ngx.var.uri
     
-    -- NÂNG CẤP: Nhường quyền bảo mật cho Django nếu là Giao diện Web
     if PUBLIC_PATHS[uri] or is_web_route(uri) then
         ctx.security = ctx.security or {}
         ctx.security.jwt_public_path = true
@@ -92,13 +65,22 @@ function _M.run(ctx)
                or ngx.var.realip_remote_addr
                or ngx.var.remote_addr
 
-    local auth_header = ngx.var.http_authorization
+    local auth_header   = ngx.var.http_authorization
+    local cookie_header = ngx.var.http_cookie
 
     ctx.security         = ctx.security or {}
     ctx.security.signals = ctx.security.signals or {}
 
     -- ── MISSING JWT ───────────────────────────────────────────
     if not auth_header then
+        -- FIX 2: Tương thích với Session Cookie của Django
+        -- Nếu không có JWT nhưng có sessionid, cho phép đi tiếp để Django xử lý
+        if cookie_header and re_find(cookie_header, [[sessionid=]], "jo") then
+            ctx.security.jwt_missing = true
+            ctx.security.using_session = true
+            return
+        end
+
         ctx.security.jwt_missing = true
         ctx.security.block       = true
 
@@ -131,12 +113,12 @@ function _M.run(ctx)
         return
     end
 
-    local token = m[1]
-
-    local jwt_lib, sha256_lib, str_lib = get_libs()
-    local token_hash = hash_token(token, sha256_lib, str_lib)
-
-    local cache = ngx.shared.jwt_cache
+    local token   = m[1]
+    local jwt_lib = get_libs()
+    
+    -- FIX 5: Băm chuỗi siêu tốc bằng MD5 nội tại thay vì phân bổ object SHA256
+    local token_hash = ngx.md5(token)
+    local cache      = ngx.shared.jwt_cache
 
     -- ── L1 CACHE HIT ─────────────────────────────────────────
     if cache then
@@ -169,7 +151,7 @@ function _M.run(ctx)
         ctx.security.block         = true
         ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
         table.insert(ctx.security.signals, "jwt_malformed")
-        if cache then cache:set(token_hash, 2, 300) end
+        if cache then cache:set(token_hash, 2, INVALID_TTL) end
         return
     end
 
@@ -180,7 +162,7 @@ function _M.run(ctx)
         ctx.security.risk = math_min((ctx.security.risk or 0) + 80, 100)
         table.insert(ctx.security.signals, "jwt_alg_attack")
         ngx.log(ngx.WARN, "[JWT] Alg attack ip=", ip, " alg=", tostring(jwt_obj.header and jwt_obj.header.alg))
-        if cache then cache:set(token_hash, 2, 300) end
+        if cache then cache:set(token_hash, 2, INVALID_TTL) end
         return
     end
 
@@ -193,7 +175,7 @@ function _M.run(ctx)
         ctx.security.risk = math_min((ctx.security.risk or 0) + 50, 100)
         table.insert(ctx.security.signals, "jwt_invalid")
         ngx.log(ngx.WARN, "[JWT] Invalid signature ip=", ip, " reason=", tostring(jwt_obj and jwt_obj.reason))
-        if cache then cache:set(token_hash, 2, 300) end
+        if cache then cache:set(token_hash, 2, INVALID_TTL) end
         return
     end
 
@@ -237,15 +219,26 @@ function _M.run(ctx)
         return
     end
 
+    -- ── IAT CHECK (FIX 8) ────────────────────────────────────
+    -- Bắt những token có timestamp tạo ra ở tương lai (Dấu hiệu hacker tự bịa token)
+    if payload.iat and payload.iat > now + 5 then
+        ctx.security.jwt_iat_future = true
+        ctx.security.risk = math_min((ctx.security.risk or 0) + 20, 100)
+        table.insert(ctx.security.signals, "jwt_iat_future")
+    end
+
     -- ── REPLAY DETECTION ─────────────────────────────────────
     local replay_key = "jwt_ip:" .. token_hash
     if cache then
         local prev_ip = cache:get(replay_key)
         if prev_ip and prev_ip ~= ip then
             ctx.security.jwt_replay = true
-            ctx.security.risk = math_min((ctx.security.risk or 0) + 30, 100)
+            -- FIX 3: JWT bị đánh cắp mang từ thiết bị khác sang -> Block cứng lập tức!
+            ctx.security.block      = true 
+            ctx.security.risk       = 100
             table.insert(ctx.security.signals, "jwt_replay")
-            ngx.log(ngx.WARN, "[JWT] Replay detected ip=", ip, " prev_ip=", prev_ip, " user_id=", payload.user_id)
+            ngx.log(ngx.WARN, "[JWT] Replay detected (STOLEN TOKEN!) ip=", ip, " prev_ip=", prev_ip, " user_id=", payload.user_id)
+            return
         else
             cache:set(replay_key, ip, math.min(ttl, MAX_REPLAY_TTL))
         end
@@ -259,12 +252,15 @@ function _M.run(ctx)
     end
 
     -- ── FORWARD IDENTITY HEADERS ─────────────────────────────
-    ngx.req.set_header("X-User-ID",   tostring(payload.user_id))
-    ngx.req.set_header("X-User-Role", tostring(payload.role or "user"))
+    ngx.req.set_header("X-User-ID", tostring(payload.user_id))
+    
+    -- FIX 6: Khử trùng (Sanitize) Role để chặn đứng Header Injection
+    local role = tostring(payload.role or "user"):gsub("[^%w_%-]", "")
+    ngx.req.set_header("X-User-Role", role)
 
     ctx.identity = {
         user_id = payload.user_id,
-        role    = payload.role or "user",
+        role    = role,
     }
 
     ctx.security.jwt_valid = true

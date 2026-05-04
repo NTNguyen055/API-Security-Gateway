@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import logging
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured  # Thêm import này
 
 # ============================================================
 # BASE
@@ -32,7 +33,6 @@ def get_env(name, default=None, required=False):
 # ============================================================
 SECRET_KEY = get_env("SECRET_KEY", required=True)
 
-# FIX: loại bỏ nhánh else vô nghĩa — logic cũ không bao giờ raise
 DEBUG = get_env("DEBUG", "False").lower() in ["true", "1", "yes"]
 
 if DEBUG:
@@ -56,7 +56,6 @@ ALLOWED_HOSTS = [
 
 # ============================================================
 # CSRF / DOMAIN TRUST
-# FIX: chỉ trust HTTPS origins — hệ thống đã force HTTPS
 # ============================================================
 CSRF_TRUSTED_ORIGINS = [f"https://{h}" for h in ALLOWED_HOSTS]
 
@@ -70,14 +69,14 @@ CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE   = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_AGE      = 3600
 
-# FIX: tắt SESSION_SAVE_EVERY_REQUEST — giảm Redis I/O
-# Session chỉ được lưu khi thực sự thay đổi
+# FIX 4: Đọc TTL từ ENV để đảm bảo đồng bộ tuyệt đối với JWT_TTL (Mặc định 3600s)
+SESSION_COOKIE_AGE = int(get_env("SESSION_TTL", "3600"))
+
 SESSION_SAVE_EVERY_REQUEST = False
 
 # ============================================================
-# PROXY (OPENRESTY) — Django trust header từ gateway
+# PROXY (OPENRESTY)
 # ============================================================
 USE_X_FORWARDED_HOST    = True
 USE_X_FORWARDED_PORT    = True
@@ -85,9 +84,6 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # ============================================================
 # SECURITY HEADERS
-# SECURE_SSL_REDIRECT = True hoạt động đúng nhờ
-# SECURE_PROXY_SSL_HEADER ở trên — OpenResty set X-Forwarded-Proto: https
-# → Django thấy scheme=https → không redirect → không loop
 # ============================================================
 SECURE_SSL_REDIRECT              = True
 SECURE_HSTS_SECONDS              = 31536000
@@ -95,9 +91,7 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS   = True
 SECURE_HSTS_PRELOAD               = True
 SECURE_CONTENT_TYPE_NOSNIFF      = True
 SECURE_REFERRER_POLICY           = "strict-origin-when-cross-origin"
-
-X_FRAME_OPTIONS = "SAMEORIGIN"   # NÂNG CẤP: SAMEORIGIN thay vì DENY
-                                  # để Django admin iframe embed hoạt động
+X_FRAME_OPTIONS                  = "SAMEORIGIN"
 
 # ============================================================
 # APPLICATION
@@ -117,15 +111,13 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    # NÂNG CẤP: WhiteNoise ngay sau SecurityMiddleware để serve static hiệu quả
-    # khi USE_S3=False (dev/fallback)
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",      # FIX: đã install, cần khai báo
+    # FIX 1: WhiteNoiseMiddleware đã bị gỡ khỏi đây và sẽ được chèn động (Dynamic Injection)
+    # ở bên dưới, CHỈ KHI hệ thống không sử dụng AWS S3.
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    # NÂNG CẤP: middleware kiểm tra X-User-ID từ gateway (defense in depth)
     "docappsystem.middleware.GatewayIdentityMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -150,7 +142,6 @@ TEMPLATES = [
     },
 ]
 
-# Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK          = "bootstrap5"
 
@@ -169,7 +160,6 @@ DATABASES = {
         "OPTIONS": {
             "charset":         "utf8mb4",
             "connect_timeout": 5,
-            # NÂNG CẤP: enforce SSL với RDS
             "ssl": {"ssl-mode": "REQUIRED"},
         },
     }
@@ -180,15 +170,11 @@ DATABASES = {
 # ============================================================
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-     "OPTIONS": {"min_length": 8}},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ============================================================
-# INTERNATIONALIZATION
-# ============================================================
 LANGUAGE_CODE = "en-us"
 TIME_ZONE     = "Asia/Ho_Chi_Minh"
 USE_I18N      = True
@@ -196,13 +182,18 @@ USE_TZ        = True
 
 # ============================================================
 # STATIC & MEDIA
-# FIX: tạo thư mục static/ nếu không tồn tại để tránh
-# ImproperlyConfigured khi collectstatic trong container
 # ============================================================
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-
 _static_dir = BASE_DIR / "static"
+
+# FIX 2: Bẫy lỗi sớm (Fail-fast) nếu cấu hình thư mục tĩnh bị xung đột
+if STATIC_ROOT.resolve() == _static_dir.resolve():
+    raise ImproperlyConfigured(
+        "STATIC_ROOT and STATICFILES_DIRS cannot point to the same directory. "
+        "It will cause infinite loop during 'collectstatic'."
+    )
+
 if not _static_dir.exists():
     _static_dir.mkdir(parents=True, exist_ok=True)
 
@@ -211,15 +202,11 @@ STATICFILES_DIRS = [_static_dir]
 MEDIA_URL  = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-# ============================================================
-# CUSTOM USER
-# ============================================================
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL    = "dasapp.CustomUser"
 
 # ============================================================
 # REDIS CACHE
-# Django dùng db=1, Lua (OpenResty gateway) dùng db=0
 # ============================================================
 CACHES = {
     "default": {
@@ -230,70 +217,49 @@ CACHES = {
             "SOCKET_CONNECT_TIMEOUT": 5,
             "SOCKET_TIMEOUT":         5,
             "RETRY_ON_TIMEOUT":       True,
-            # NÂNG CẤP: connection pool size phù hợp với gunicorn workers
             "CONNECTION_POOL_KWARGS": {"max_connections": 20},
         },
-        # NÂNG CẤP: key prefix để tránh collision nếu dùng chung Redis
         "KEY_PREFIX": "docapp",
     }
 }
 
-# Session backend dùng Redis (đã có django-redis)
 SESSION_ENGINE      = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
 
 # ============================================================
-# AWS S3 (OPTIONAL) & STORAGE BACKENDS (DJANGO 4.2+)
-# FIX: Gom cấu hình lưu trữ vào 1 block STORAGES duy nhất,
-# xóa STATICFILES_STORAGE để không bị lỗi mutually exclusive.
+# AWS S3 & STORAGE BACKENDS
 # ============================================================
 USE_S3 = get_env("USE_S3", "False") == "True"
 
 if USE_S3:
     AWS_STORAGE_BUCKET_NAME = get_env("AWS_STORAGE_BUCKET_NAME", required=True)
     AWS_S3_REGION_NAME      = get_env("AWS_S3_REGION_NAME", "ap-northeast-1")
-
     AWS_DEFAULT_ACL         = None
     AWS_QUERYSTRING_AUTH    = False
     AWS_S3_FILE_OVERWRITE   = False
-
-    AWS_S3_CUSTOM_DOMAIN = (
-        f"{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com"
-    )
-
+    AWS_S3_CUSTOM_DOMAIN    = f"{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com"
     AWS_S3_OBJECT_PARAMETERS = {"CacheControl": "max-age=86400"}
-
-    # NÂNG CẤP: dùng HTTPS cho S3 URL
-    AWS_S3_URL_PROTOCOL = "https:"
+    AWS_S3_URL_PROTOCOL     = "https:"
 
     STORAGES = {
-        "default": {
-            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
-            "OPTIONS": {"location": "media"},
-        },
-        "staticfiles": {
-            "BACKEND": "storages.backends.s3boto3.S3StaticStorage",
-            "OPTIONS": {"location": "static"},
-        },
+        "default":     {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage", "OPTIONS": {"location": "media"}},
+        "staticfiles": {"BACKEND": "storages.backends.s3boto3.S3StaticStorage", "OPTIONS": {"location": "static"}},
     }
 
     STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
     MEDIA_URL  = f"https://{AWS_S3_CUSTOM_DOMAIN}/media/"
 
 else:
-    # KHI KHÔNG DÙNG S3 (Môi trường local/dev)
+    # Môi trường dev (hoặc production không dùng S3)
     STORAGES = {
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage",
-        },
-        "staticfiles": {
-            # NÂNG CẤP: WhiteNoise compression + caching cho static files
-            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-        },
+        "default":     {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
     }
+    # FIX 1: Chèn WhiteNoiseMiddleware vào đúng vị trí số 1 (sau SecurityMiddleware)
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 
 # ============================================================
-# LOGGING — structured, phân cấp rõ ràng
+# LOGGING
 # ============================================================
 _log_level = "DEBUG" if DEBUG else "INFO"
 
@@ -301,16 +267,16 @@ LOGGING = {
     "version":                  1,
     "disable_existing_loggers": False,
     "formatters": {
-        # Format ngắn gọn cho console (Docker stdout)
         "console": {
             "format": "[%(asctime)s] %(levelname)-8s %(name)s: %(message)s",
             "datefmt": "%Y-%m-%d %H:%M:%S",
         },
-        # NÂNG CẤP: JSON formatter cho tích hợp CloudWatch/ELK
+        # FIX 3: Sửa %(message)r thành "%(message)s" bên trong ngoặc kép
+        # Đảm bảo các hệ thống đọc Log tập trung (ELK, Datadog...) không bị gãy format JSON
         "json": {
             "()":      "logging.Formatter",
             "format":  '{"time":"%(asctime)s","level":"%(levelname)s",'
-                       '"logger":"%(name)s","msg":%(message)r}',
+                       '"logger":"%(name)s","msg":"%(message)s"}',
             "datefmt": "%Y-%m-%dT%H:%M:%S",
         },
     },
@@ -325,30 +291,10 @@ LOGGING = {
         },
     },
     "loggers": {
-        # Django core
-        "django": {
-            "handlers": ["console"],
-            "level":    _log_level,
-            "propagate": False,
-        },
-        # DB queries — chỉ bật khi DEBUG
-        "django.db.backends": {
-            "handlers":  ["console"],
-            "level":     "DEBUG" if DEBUG else "WARNING",
-            "propagate": False,
-        },
-        # Security events — luôn bật WARN+
-        "django.security": {
-            "handlers":  ["console"],
-            "level":     "WARNING",
-            "propagate": False,
-        },
-        # App logger
-        "dasapp": {
-            "handlers":  ["console"],
-            "level":     _log_level,
-            "propagate": False,
-        },
+        "django":             {"handlers": ["console"], "level": _log_level, "propagate": False},
+        "django.db.backends": {"handlers": ["console"], "level": "DEBUG" if DEBUG else "WARNING", "propagate": False},
+        "django.security":    {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "dasapp":             {"handlers": ["console"], "level": _log_level, "propagate": False},
     },
     "root": {
         "handlers": ["console"],

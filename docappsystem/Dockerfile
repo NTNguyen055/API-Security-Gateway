@@ -25,7 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-
 # Build tất cả wheels vào /wheels — cache-friendly layer
 RUN pip install --upgrade pip \
  && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
@@ -33,27 +32,24 @@ RUN pip install --upgrade pip \
 
 # =============================================================================
 # STAGE 2: Runtime — lean image, không có build tools
-# FIX: bỏ build-essential và libmariadb-dev khỏi runtime
-#      chỉ cần libmariadb3 (shared library runtime)
 # =============================================================================
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+# FIX 2: Bỏ PYTHONOPTIMIZE=1 để tránh lỗi ngầm nếu code (hoặc thư viện) dùng lệnh assert
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_ROOT_USER_ACTION=ignore \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONOPTIMIZE=1 \
     # Gunicorn tuning
     GUNICORN_WORKERS=2 \
     GUNICORN_THREADS=2 \
     GUNICORN_TIMEOUT=60
 
-# FIX: chỉ cài runtime library, không cài -dev headers
+# Chỉ cài runtime library, không cài -dev headers
 # libmariadb3  : shared library để mysqlclient chạy
-# curl         : dùng cho healthcheck (bỏ nếu chuyển sang python healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmariadb3 \
     && rm -rf /var/lib/apt/lists/* \
@@ -62,18 +58,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy wheels từ builder và install — không cần build tools
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
-
 RUN pip install --no-index --no-cache-dir --find-links=/wheels -r requirements.txt \
  && rm -rf /wheels requirements.txt
 
 # ── SECURITY: non-root user với UID cố định ──────────────────
-# FIX: UID cố định 1001 để volume permissions nhất quán giữa các build
+# UID cố định 1001 để volume permissions nhất quán giữa các build
 RUN groupadd -g 1001 appgroup \
  && useradd -u 1001 -g appgroup -m -s /bin/bash appuser
 
 # ── COPY SOURCE CODE ──────────────────────────────────────────
-# FIX: --chown đảm bảo appuser có quyền đọc ngay từ đầu
-# (Cần có .dockerignore để tránh copy .env, __pycache__, .git)
+# --chown đảm bảo appuser có quyền đọc ngay từ đầu
+# (.dockerignore sẽ chặn .env, __pycache__, .git lọt vào)
 COPY --chown=appuser:appgroup . .
 
 # ── TẠO THƯ MỤC CẦN THIẾT ────────────────────────────────────
@@ -88,8 +83,7 @@ USER appuser
 EXPOSE 8000
 
 # ── HEALTHCHECK ──────────────────────────────────────────────
-# Thêm header X-Forwarded-Proto: https vào request
-# Để Django không redirect (301) sang HTTPS gây crash urllib
+# Dùng thư viện Python có sẵn (urllib) thay vì cài cURL gây nặng file
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \
     CMD python -c \
         "import urllib.request; \
@@ -100,18 +94,3 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \
          urllib.request.urlopen(req)" \
     || exit 1
 
-# ── ENTRYPOINT / CMD ──────────────────────────────────────────
-# FIX: CMD ở Dockerfile chỉ là fallback
-# docker-compose.yml dùng `command:` để override → giữ nhất quán
-# Đặt cùng params với docker-compose để không bị mismatch
-CMD ["gunicorn", \
-     "docappsystem.wsgi:application", \
-     "--bind",                  "0.0.0.0:8000", \
-     "--workers",               "2", \
-     "--threads",               "2", \
-     "--timeout",               "60", \
-     "--max-requests",          "1000", \
-     "--max-requests-jitter",   "100", \
-     "--access-logfile",        "-", \
-     "--error-logfile",         "-", \
-     "--log-level",             "info"]
