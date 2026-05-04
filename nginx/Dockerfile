@@ -1,22 +1,17 @@
 FROM openresty/openresty:alpine-fat
 
 # ================= BASE =================
-# Thêm libmaxminddb-dev để phục vụ quá trình build thư viện lua-resty-maxminddb
 RUN apk add --no-cache \
     ca-certificates \
     libmaxminddb \
-    libmaxminddb-dev \
     openssl \
     curl \
     && update-ca-certificates
 
-# ================= LUA ROCKS (CÀI ĐẶT THƯ VIỆN LUA) =================
-# FIX 1: Pin (cố định) phiên bản để tránh lỗi sập hệ thống khi thư viện ra bản mới
-# Bổ sung luôn redis và maxminddb để phục vụ kiến trúc tối ưu mới nhất
+# ================= LUA ROCKS =================
+# Chỉ cài 2 thư viện này qua Luarocks giống hệt file cũ của bạn đã chạy thành công
 RUN luarocks install lua-resty-jwt 0.2.3 \
-    && luarocks install lua-resty-http 0.17.2 \
-    && luarocks install lua-resty-redis 0.29 \
-    && luarocks install lua-resty-maxminddb 1.1.1
+    && luarocks install lua-resty-http 0.17.2
 
 # ================= DIR =================
 RUN mkdir -p \
@@ -27,33 +22,30 @@ RUN mkdir -p \
     /etc/letsencrypt/live/dacn3.duckdns.org
 
 # ================= DUMMY SSL =================
-# FIX 2: Tăng hạn SSL giả lập lên 10 năm (3650 days) để phòng trường hợp Let's Encrypt lỗi
-RUN openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+# Tạo chứng chỉ giả để Nginx có thể khởi động thành công lần đầu
+RUN openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
     -keyout /etc/letsencrypt/live/dacn3.duckdns.org/privkey.pem \
     -out /etc/letsencrypt/live/dacn3.duckdns.org/fullchain.pem \
     -subj "/CN=dacn3.duckdns.org"
 
 # ================= COPY VENDOR =================
+# Bê nguyên xi thư mục vendor (chứa maxminddb, prometheus, v.v.) vào image
 COPY vendor/resty/ /usr/local/openresty/lualib/resty/
 COPY vendor/prometheus*.lua /usr/local/openresty/lualib/
 
 # ================= GEOIP =================
 COPY GeoLite2-Country.mmdb /etc/nginx/geoip/
 
-# ================= CONFIG =================
+# ================= CONFIG & LUA SCRIPTS =================
+# Copy Nginx config và toàn bộ các file Lua siêu bảo mật mà chúng ta vừa nâng cấp
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY lua/ /usr/local/openresty/nginx/lua/
 
 # ================= PERMISSION =================
-# FIX 3: Áp dụng nguyên tắc Đặc quyền tối thiểu (Least Privilege)
-# Chỉ cấp quyền đọc (644) cho file và quyền thực thi (755) cho folder cụ thể
-RUN chown -R root:root /usr/local/openresty/nginx/lua/ \
-    && chown root:root /usr/local/openresty/nginx/conf/nginx.conf \
-    && chmod 644 /usr/local/openresty/nginx/conf/nginx.conf \
-    && find /usr/local/openresty/nginx/lua/ -type f -exec chmod 644 {} \; \
-    && find /usr/local/openresty/nginx/lua/ -type d -exec chmod 755 {} \;
+RUN chmod -R 755 /usr/local/openresty/
 
 # ================= VERIFY =================
+# Jenkins sẽ chạy lệnh này ở Stage 4, nhưng để sẵn ở đây cũng là một lớp test an toàn
 RUN /usr/local/openresty/bin/openresty -t
 
 # ================= PORT =================
