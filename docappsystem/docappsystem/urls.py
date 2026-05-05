@@ -5,6 +5,7 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.db import connection, transaction
+from django.views.generic import RedirectView
 
 # Import thư viện auth mặc định của Django để dùng hàm Logout
 from django.contrib.auth import views as auth_views
@@ -65,6 +66,9 @@ urlpatterns = [
     
     # Logout: Sử dụng built-in của Django để xóa Session sạch sẽ
     path("logout/",  auth_views.LogoutView.as_view(next_page='login'), name="logout"),
+    
+    # Điều hướng favicon.ico về thư mục static
+    path("favicon.ico", RedirectView.as_view(url='/static/favicon.ico', permanent=True)),
 
     # Health check — match cả /health/ và /health để tránh lỗi redirect 301
     path("health/", health_check, name="health_check"),
