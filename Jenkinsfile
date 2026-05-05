@@ -32,7 +32,7 @@ pipeline {
         DOCKER_BUILDKIT          = '1'
         COMPOSE_DOCKER_CLI_BUILD = '1'
 
-        DOCKERHUB_CREDS = credentials('dockerhub-creds')
+        DOCKERHUB_CREDS = credentials('dockerhub-cred-AGWS')
         EC2_SSH_CREDS   = 'app-server-ssh'
         // FIX 1: Đã xóa dòng EC2_APP_IP hardcode ở đây
         EC2_USER        = 'ubuntu'
