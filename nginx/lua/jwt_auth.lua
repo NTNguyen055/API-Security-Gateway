@@ -5,7 +5,6 @@ local re_find  = ngx.re.find
 local re_match = ngx.re.match
 local math_min = math.min
 
--- FIX 5: Bỏ sha256_lib và str_lib vì ta sẽ dùng ngx.md5 nội tại (nhanh hơn gấp nhiều lần)
 local function get_libs()
     return require "resty.jwt"
 end
@@ -33,10 +32,8 @@ local PUBLIC_PATHS = {
 -- =============================================================================
 -- HÀM NHẬN DIỆN GIAO DIỆN WEB
 -- =============================================================================
--- FIX 1 & 7: Gộp tất cả Prefix thành 1 chuỗi Regex PCRE siêu tốc và bắt buộc 
--- phải kết thúc bằng dấu gạch chéo `/` hoặc hết chuỗi `$`. 
--- Chặn đứng trò Bypass "/doc-exploit".
-local WEB_PREFIXES_PATTERN = [[^/(?:static|media|admin|doctor|doctors|user|users|patient|patients|manage|search|view|update|profile|password|base|logout)(?:/|$)]]
+-- Đã dọn dẹp 'logout' ra khỏi regex vì nó đã được match chính xác (Exact match) ở PUBLIC_PATHS
+local WEB_PREFIXES_PATTERN = [[^/(?:static|media|admin|doctor|doctors|user|users|patient|patients|manage|search|view|update|profile|password|base)(?:/|$)]]
 
 local function is_web_route(uri)
     if not uri then return false end
@@ -44,7 +41,7 @@ local function is_web_route(uri)
 end
 
 local MAX_REPLAY_TTL = 3600  -- 1 giờ
-local INVALID_TTL    = 60    -- FIX 4: Giảm thời gian cache Token lỗi xuống 60s để tiết kiệm RAM
+local INVALID_TTL    = 60    -- Giảm thời gian cache Token lỗi xuống 60s để tiết kiệm RAM
 
 -- =============================================================================
 -- MAIN
@@ -73,11 +70,12 @@ function _M.run(ctx)
 
     -- ── MISSING JWT ───────────────────────────────────────────
     if not auth_header then
-        -- FIX 2: Tương thích với Session Cookie của Django
-        -- Nếu không có JWT nhưng có sessionid, cho phép đi tiếp để Django xử lý
+        -- Tương thích với Session Cookie của Django
         if cookie_header and re_find(cookie_header, [[sessionid=]], "jo") then
             ctx.security.jwt_missing = true
             ctx.security.using_session = true
+            -- Ghi log INFO để tiện truy vết audit các luồng dùng Session
+            ngx.log(ngx.INFO, "[JWT] Session fallback ip=", ip, " uri=", uri)
             return
         end
 
@@ -116,7 +114,7 @@ function _M.run(ctx)
     local token   = m[1]
     local jwt_lib = get_libs()
     
-    -- FIX 5: Băm chuỗi siêu tốc bằng MD5 nội tại thay vì phân bổ object SHA256
+    -- Băm chuỗi siêu tốc bằng MD5 nội tại thay vì phân bổ object SHA256
     local token_hash = ngx.md5(token)
     local cache      = ngx.shared.jwt_cache
 
@@ -219,7 +217,7 @@ function _M.run(ctx)
         return
     end
 
-    -- ── IAT CHECK (FIX 8) ────────────────────────────────────
+    -- ── IAT CHECK ────────────────────────────────────
     -- Bắt những token có timestamp tạo ra ở tương lai (Dấu hiệu hacker tự bịa token)
     if payload.iat and payload.iat > now + 5 then
         ctx.security.jwt_iat_future = true
@@ -233,7 +231,7 @@ function _M.run(ctx)
         local prev_ip = cache:get(replay_key)
         if prev_ip and prev_ip ~= ip then
             ctx.security.jwt_replay = true
-            -- FIX 3: JWT bị đánh cắp mang từ thiết bị khác sang -> Block cứng lập tức!
+            -- JWT bị đánh cắp mang từ thiết bị khác sang -> Block cứng lập tức!
             ctx.security.block      = true 
             ctx.security.risk       = 100
             table.insert(ctx.security.signals, "jwt_replay")
@@ -254,7 +252,7 @@ function _M.run(ctx)
     -- ── FORWARD IDENTITY HEADERS ─────────────────────────────
     ngx.req.set_header("X-User-ID", tostring(payload.user_id))
     
-    -- FIX 6: Khử trùng (Sanitize) Role để chặn đứng Header Injection
+    -- Khử trùng (Sanitize) Role để chặn đứng Header Injection
     local role = tostring(payload.role or "user"):gsub("[^%w_%-]", "")
     ngx.req.set_header("X-User-Role", role)
 

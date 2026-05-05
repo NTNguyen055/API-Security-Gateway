@@ -14,12 +14,8 @@ local ALLOWED_COUNTRIES = {
     ["JP"] = true,
 }
 
--- Khởi tạo Database một lần duy nhất ở cấp độ Module (Worker phase)
--- Đường dẫn này phải khớp với lệnh COPY trong Dockerfile của bạn
-local DB_PATH = "/etc/nginx/geoip/GeoLite2-Country.mmdb"
-if not geo.initted() then
-    geo.init(DB_PATH)
-end
+-- KHUYẾN NGHỊ: Việc khởi tạo database đã được dời sang init_by_lua_block 
+-- trong file nginx.conf để tối ưu hóa bộ nhớ RAM cho các Nginx Workers (Copy-on-Write).
 
 -- =============================================================================
 -- MAIN
@@ -33,14 +29,13 @@ function _M.run(ctx)
     ctx.security         = ctx.security or {}
     ctx.security.signals = ctx.security.signals or {}
 
-    -- VẤN ĐỀ 4: Tái sử dụng utils.lua, loại bỏ code lặp lại
+    -- Tái sử dụng utils.lua, loại bỏ code lặp lại
     if not ip or utils.is_private_ip(ip) then
         ctx.security.geo_private = true
         return
     end
 
-    -- VẤN ĐỀ 1 & 5: Đọc trực tiếp từ file MMDB nội bộ (< 1 mili-giây)
-    -- KHÔNG CẦN HTTP API, KHÔNG CẦN CACHE, KHÔNG CẦN LOCK!
+    -- Đọc trực tiếp từ file MMDB nội bộ (< 1 mili-giây)
     local res, err = geo.lookup(ip)
     
     if not res then
@@ -64,7 +59,7 @@ function _M.run(ctx)
         return
     end
 
-    -- VẤN ĐỀ 3: Hard Block (Chặn đứng lập tức) những quốc gia không được phép
+    -- Hard Block (Chặn đứng lập tức) những quốc gia không được phép
     ctx.security.geo_blocked = true
     ctx.security.block       = true 
 
@@ -78,8 +73,6 @@ function _M.run(ctx)
     
     ngx.log(ngx.WARN, "[GEO] BLOCK country=", country, " ip=", ip)
 
-    -- (Tùy chọn) Gọi Prometheus metric nếu có khai báo
-    -- if metric_blocked then metric_blocked:inc(1, {"geo_block"}) end
 end
 
 return _M

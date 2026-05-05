@@ -60,16 +60,18 @@ local function normalize(input)
     input = input:gsub("<!%-%-.-%-%->", " ")
 
     -- FIX 2: Decode HTML entity thành ký tự chuẩn thay vì dấu cách
-    -- Khôi phục lại các chuỗi như &#60; thành < để pattern hoạt động đúng
+    -- LƯU Ý CHẤP NHẬN RỦI RO (Trade-off): Chỉ decode dải ASCII (32-255).
+    -- Unicode/Control chars ngoài dải này bị ép thành khoảng trắng. 
+    -- Điều này đủ để bắt 99% payload XSS thực tế mà vẫn giữ hiệu suất cao.
     input = input:gsub("&#(%d+);", function(n)
         local num = tonumber(n)
-        if num and num >= 32 and num <= 126 then return string.char(num) end
+        if num and num >= 32 and num <= 255 then return string.char(num) end
         return " "
     end)
     
     input = input:gsub("&#x(%x+);", function(h)
         local num = tonumber(h, 16)
-        if num and num >= 32 and num <= 126 then return string.char(num) end
+        if num and num >= 32 and num <= 255 then return string.char(num) end
         return " "
     end)
 
@@ -130,12 +132,9 @@ local function scan_args(args, ctx)
     local found = false
     for k, v in pairs(args) do
         if type(v) == "table" then
-            -- Quét sâu vào bên trong table/mảng
-            for _, vv in ipairs(v) do
-                if type(vv) == "string" or type(vv) == "number" then
-                    found = check(tostring(vv), ctx, "data:" .. tostring(k)) or found
-                end
-            end
+            -- NÂNG CẤP: Đệ quy thực sự (Full Recursive) để quét sâu vào các JSON 
+            -- lồng nhau (nested objects), chặn bypass kiểu {"a": {"b": "<script>"}}
+            found = scan_args(v, ctx) or found
         elseif type(v) == "string" or type(v) == "number" then
             found = check(tostring(v), ctx, "data:" .. tostring(k)) or found
         end

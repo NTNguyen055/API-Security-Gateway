@@ -34,7 +34,7 @@ COPY vendor/resty/ /usr/local/openresty/lualib/resty/
 COPY vendor/prometheus*.lua /usr/local/openresty/lualib/
 
 # ================= GEOIP =================
-COPY GeoLite2-Country.mmdb /etc/nginx/geoip/
+COPY GeoLite2-Country.mmdb /etc/nginx/geoip/GeoLite2-Country.mmdb
 
 # ================= CONFIG & LUA SCRIPTS =================
 # Copy Nginx config và toàn bộ các file Lua siêu bảo mật mà chúng ta vừa nâng cấp
