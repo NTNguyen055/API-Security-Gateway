@@ -166,17 +166,20 @@ pipeline {
             }
         }
 
-        // ── STAGE 5: PUSH TO DOCKERHUB ────────────────────────────────────────
+       // ── STAGE 5: PUSH TO DOCKERHUB ────────────────────────────────────────
         stage('Push to DockerHub') {
             steps {
                 script {
+                    echo "--- Logging into DockerHub ---"
+                    // THÊM DÒNG NÀY: Dùng pipe echo để truyền token an toàn vào lệnh login
+                    sh 'echo "$DOCKERHUB_CREDS_PSW" | docker login -u "$DOCKERHUB_CREDS_USR" --password-stdin'
+
                     echo "--- Pushing images to DockerHub ---"
                     // 1. Push các tag version hiện tại (v144, v145...)
                     sh "docker push ${GW_IMAGE}:${IMAGE_TAG}"
                     sh "docker push ${APP_IMAGE}:${IMAGE_TAG}"
                     
-                    // 2. BỔ SUNG: Dán nhãn 'latest' cho bản build này và push lên mạng
-                    // Điều này giúp EC2 luôn kéo được bản code mới nhất
+                    // 2. Dán nhãn 'latest' cho bản build này và push lên mạng
                     sh "docker tag ${GW_IMAGE}:${IMAGE_TAG} ${GW_IMAGE}:latest"
                     sh "docker push ${GW_IMAGE}:latest"
                     
