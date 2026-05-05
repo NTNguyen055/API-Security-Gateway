@@ -168,16 +168,21 @@ pipeline {
 
         // ── STAGE 5: PUSH TO DOCKERHUB ────────────────────────────────────────
         stage('Push to DockerHub') {
-            when { branch 'main' } // FIX 6: Giới hạn chỉ Push khi ở branch main
             steps {
-                echo "🐳 [5/6] Pushing images to DockerHub..."
-                sh 'echo $DOCKERHUB_CREDS_PSW | docker login -u $DOCKERHUB_CREDS_USR --password-stdin'
-                sh '''
-                    docker push ${APP_IMAGE}:${IMAGE_TAG}
-                    docker push ${APP_IMAGE}:latest
-                    docker push ${GW_IMAGE}:${IMAGE_TAG}
-                    docker push ${GW_IMAGE}:latest
-                '''
+                script {
+                    echo "--- Pushing images to DockerHub ---"
+                    // 1. Push các tag version hiện tại (v144, v145...)
+                    sh "docker push ${GW_IMAGE}:${IMAGE_TAG}"
+                    sh "docker push ${APP_IMAGE}:${IMAGE_TAG}"
+                    
+                    // 2. BỔ SUNG: Dán nhãn 'latest' cho bản build này và push lên mạng
+                    // Điều này giúp EC2 luôn kéo được bản code mới nhất
+                    sh "docker tag ${GW_IMAGE}:${IMAGE_TAG} ${GW_IMAGE}:latest"
+                    sh "docker push ${GW_IMAGE}:latest"
+                    
+                    sh "docker tag ${APP_IMAGE}:${IMAGE_TAG} ${APP_IMAGE}:latest"
+                    sh "docker push ${APP_IMAGE}:latest"
+                }
             }
         }
 
