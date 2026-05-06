@@ -4,6 +4,7 @@ FROM openresty/openresty:alpine-fat
 RUN apk add --no-cache \
     ca-certificates \
     libmaxminddb \
+    libmaxminddb-dev \
     openssl \
     curl \
     && update-ca-certificates
