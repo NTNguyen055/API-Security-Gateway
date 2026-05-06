@@ -191,7 +191,6 @@ pipeline {
 
         // ── STAGE 6: DEPLOY TO EC2 ────────────────────────────────────────────
         stage('Deploy & Verify') {
-            when { branch 'main' } // FIX 6: Giới hạn chỉ Deploy khi ở branch main
             steps {
                 echo "🚢 [6/6] Deploying to EC2 (${params.EC2_APP_IP})..."
 
