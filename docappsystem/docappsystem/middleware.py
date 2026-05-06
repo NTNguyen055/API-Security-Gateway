@@ -17,9 +17,10 @@ logger = logging.getLogger("dasapp")
 
 # FIX 2: Đồng bộ 100% với danh sách PUBLIC_PATHS của jwt_auth.lua
 _PUBLIC_PATHS = frozenset([
+    "/",
     "/login/",
     "/doLogin/",
-    "/logout/",  # <--- THÊM DÒNG NÀY
+    "/logout/",  
     "/health/",
     "/health",
     "/doctor/signup/",
